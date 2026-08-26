@@ -47,7 +47,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src/renderer/src'),
-      '@stream-app/shared': path.resolve(__dirname, '../../packages/shared/src/index.ts'),
+      '@stream-app/shared': path.resolve(__dirname, './src/renderer/src/types/shared.ts'),
       '@stream-app/native-audio': path.resolve(__dirname, '../../packages/native-audio/index.js')
     }
   },
