@@ -2,15 +2,16 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy package manifests
+# Copy package manifests and root config
 COPY package*.json ./
+COPY tsconfig.base.json ./
 COPY packages/shared/package*.json ./packages/shared/
 COPY apps/backend/package*.json ./apps/backend/
 
 # Install dependencies
 RUN npm ci
 
-# Copy sources
+# Copy source trees
 COPY packages/shared ./packages/shared
 COPY apps/backend ./apps/backend
 
@@ -27,6 +28,7 @@ ENV NODE_ENV=production
 ENV PORT=8080
 
 COPY package*.json ./
+COPY tsconfig.base.json ./
 COPY packages/shared/package*.json ./packages/shared/
 COPY apps/backend/package*.json ./apps/backend/
 
