@@ -266,10 +266,12 @@ export const App: React.FC = () => {
         role: 'publisher',
       });
 
-      // 2. Connect to LiveKit room
-      if (!livekitService.connected) {
-        await livekitService.connect(tokenResponse);
+      // 2. Connect to LiveKit room with publisher permissions
+      // Must always reconnect with publisher token — viewer token doesn't have canPublish
+      if (livekitService.connected) {
+        await livekitService.disconnect();
       }
+      await livekitService.connect(tokenResponse);
 
       // 3. Set quality preset
       livekitService.setQualityPreset(qualityPreset);
