@@ -8,6 +8,7 @@ import { ConnectionState } from 'livekit-client';
 import { SourcePickerModal } from './components/SourcePickerModal';
 import { StreamPublisher } from './components/StreamPublisher';
 import { StreamViewer } from './components/StreamViewer';
+import { TellasLogo } from './components/TellasLogo';
 import {
   Monitor,
   Users,
@@ -416,15 +417,18 @@ export const App: React.FC = () => {
 
       {/* Clean Discord-Style Header */}
       <header className="h-12 px-4 bg-[#2B2D31] border-b border-[#1F2023] flex items-center justify-between z-30 shadow-sm">
-        {/* Left: Discord Channel Title */}
+        {/* Left: Tellas Branding & Channel */}
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-[#5865F2] flex items-center justify-center text-white shadow-sm">
-            <Radio className="w-4 h-4" />
+          <div className="w-8 h-8 rounded-lg bg-[#111214] border border-white/10 flex items-center justify-center shadow-md">
+            <TellasLogo className="w-5 h-5" />
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="text-sm font-bold text-[#80848E]">#</span>
-            <span className="font-bold text-[#F2F3F5] text-sm tracking-wide">
-              transmissão-ao-vivo
+            <span className="font-extrabold text-[#F2F3F5] text-sm tracking-wider">
+              TELLAS
+            </span>
+            <span className="text-xs font-bold text-[#80848E]">/</span>
+            <span className="text-xs font-semibold text-[#949BA4]">
+              transmissão
             </span>
           </div>
         </div>
@@ -570,14 +574,16 @@ export const App: React.FC = () => {
             <div className="w-full max-w-md bg-[#2B2D31] p-7 rounded-2xl border border-[#1E1F22] shadow-2xl space-y-5">
               
               {/* Header Icon & Title */}
-              <div className="text-center space-y-1.5">
-                <div className="w-14 h-14 rounded-2xl bg-[#5865F2] mx-auto flex items-center justify-center text-white shadow-lg shadow-[#5865F2]/20 mb-2">
-                  <Sparkles className="w-7 h-7" />
+              <div className="text-center space-y-2">
+                <div className="w-16 h-16 rounded-2xl bg-[#111214] border border-white/10 mx-auto flex items-center justify-center shadow-xl mb-1 transform hover:scale-105 transition duration-200">
+                  <TellasLogo className="w-10 h-10" />
                 </div>
-                <h2 className="text-xl font-extrabold text-[#F2F3F5]">Compartilhamento de Tela</h2>
-                <p className="text-xs text-[#949BA4]">
-                  Transmissão ao vivo com áudio de alta fidelidade sem ruídos.
-                </p>
+                <div>
+                  <h2 className="text-2xl font-black text-[#F2F3F5] tracking-wider">TELLAS</h2>
+                  <p className="text-xs text-[#949BA4] mt-0.5">
+                    Compartilhamento de tela em tempo real com áudio isolado.
+                  </p>
+                </div>
               </div>
 
               {/* Participant Name Input */}

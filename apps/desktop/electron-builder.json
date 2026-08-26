@@ -1,6 +1,6 @@
 {
-  "appId": "com.streamcraft.desktop",
-  "productName": "StreamCraft",
+  "appId": "com.tellas.app",
+  "productName": "Tellas",
   "electronVersion": "29.4.6",
   "directories": {
     "output": "release",

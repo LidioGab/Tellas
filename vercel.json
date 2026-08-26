@@ -1,0 +1,11 @@
+{
+  "buildCommand": "npm run build:shared && npm run build:renderer --workspace=apps/desktop",
+  "outputDirectory": "apps/desktop/dist/renderer",
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
