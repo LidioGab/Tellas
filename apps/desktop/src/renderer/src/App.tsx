@@ -839,6 +839,8 @@ export const App: React.FC = () => {
                       remoteStream={item.stream}
                       peerId={participantId}
                       streamerName={item.identity}
+                      roomId={roomId}
+                      memberCount={members.length}
                     />
                   ))}
                 </div>
