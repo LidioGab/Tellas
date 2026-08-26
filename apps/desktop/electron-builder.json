@@ -1,0 +1,35 @@
+{
+  "appId": "com.streamcraft.desktop",
+  "productName": "StreamCraft",
+  "electronVersion": "29.4.6",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "../../packages/native-audio/build/Release/native_audio.node",
+      "to": "native_audio.node"
+    },
+    {
+      "from": "../../packages/native-audio/index.js",
+      "to": "packages/native-audio/index.js"
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "dir",
+        "arch": ["x64"]
+      }
+    ]
+  },
+  "asar": true,
+  "asarUnpack": [
+    "**/node_modules/ffmpeg-static/**"
+  ]
+}

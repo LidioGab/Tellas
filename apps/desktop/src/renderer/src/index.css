@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #1E1F22;
+    color: #F2F3F5;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    user-select: none;
+  }
+}
+
+@layer utilities {
+  .discord-panel {
+    background: #2B2D31;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  
+  .discord-card {
+    background: #1E1F22;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
+  .discord-glass {
+    background: rgba(30, 31, 34, 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+}
+
+/* Custom Discord Style Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #2B2D31;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1A1B1E;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #111214;
+}

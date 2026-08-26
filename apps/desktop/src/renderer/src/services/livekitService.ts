@@ -1,0 +1,364 @@
+import {
+  Room,
+  RoomEvent,
+  Track,
+  RemoteTrack,
+  RemoteTrackPublication,
+  RemoteParticipant,
+  LocalTrackPublication,
+  VideoPresets,
+  ConnectionState,
+  DisconnectReason,
+  type VideoCodec,
+} from 'livekit-client';
+import type {
+  LiveKitTokenResponse,
+  LiveKitTokenRequest,
+  VideoQualityPreset,
+} from '@stream-app/shared';
+import { VIDEO_QUALITY_PRESETS } from '@stream-app/shared';
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+export interface RemoteStreamInfo {
+  participantId: string;
+  identity: string;
+  stream: MediaStream;
+}
+
+export interface LiveKitCallbacks {
+  onRemoteTrackSubscribed: (info: RemoteStreamInfo) => void;
+  onRemoteTrackUnsubscribed: (participantId: string) => void;
+  onConnectionStateChanged: (state: ConnectionState) => void;
+  onError: (error: Error) => void;
+}
+
+// ─── Backend URL ────────────────────────────────────────────────────────────
+
+function getBackendUrl(): string {
+  const envUrl = import.meta.env.VITE_BACKEND_URL as string | undefined;
+  if (envUrl) return envUrl;
+  if (typeof window !== 'undefined' && window.location && window.location.hostname) {
+    return `http://${window.location.hostname}:3001`;
+  }
+  return 'http://localhost:3001';
+}
+
+// ─── LiveKitService ─────────────────────────────────────────────────────────
+
+export class LiveKitService {
+  private room: Room | null = null;
+  private callbacks: LiveKitCallbacks | null = null;
+  private currentQualityPreset: string = '1080p30';
+  private backendUrl: string;
+  private participantStreams: Map<string, MediaStream> = new Map();
+
+  constructor() {
+    this.backendUrl = getBackendUrl();
+  }
+
+  // ─── Configuration ──────────────────────────────────────────────────
+
+  public setCallbacks(callbacks: LiveKitCallbacks): void {
+    this.callbacks = callbacks;
+  }
+
+  public setQualityPreset(presetKey: string): void {
+    if (VIDEO_QUALITY_PRESETS[presetKey]) {
+      this.currentQualityPreset = presetKey;
+    }
+  }
+
+  public getQualityPreset(): VideoQualityPreset {
+    return VIDEO_QUALITY_PRESETS[this.currentQualityPreset] || VIDEO_QUALITY_PRESETS['1080p30'];
+  }
+
+  // ─── Token Request ──────────────────────────────────────────────────
+
+  public async requestToken(request: LiveKitTokenRequest): Promise<LiveKitTokenResponse> {
+    console.log('[LiveKit] Requesting token from:', `${this.backendUrl}/api/livekit/token`, request);
+    const response = await fetch(`${this.backendUrl}/api/livekit/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Erro ao solicitar token (HTTP ${response.status})`);
+    }
+
+    const data = await response.json();
+    console.log('[LiveKit] Token received successfully for room:', data.roomName);
+    return data;
+  }
+
+  // ─── Connect to Room ────────────────────────────────────────────────
+
+  public async connect(tokenResponse: LiveKitTokenResponse): Promise<void> {
+    // Clean up any existing connection
+    await this.disconnect();
+
+    this.room = new Room({
+      adaptiveStream: true,
+      dynacast: true,
+      videoCaptureDefaults: {
+        resolution: VideoPresets.h1080.resolution,
+      },
+    });
+
+    this.setupRoomEventListeners();
+
+    console.log('[LiveKit] Connecting to:', tokenResponse.livekitUrl, 'with room:', tokenResponse.roomName);
+    await this.room.connect(tokenResponse.livekitUrl, tokenResponse.token, {
+      autoSubscribe: true,
+    });
+
+    console.log('[LiveKit] Connected to room:', tokenResponse.roomName, '| state:', this.room.state);
+
+    if (this.callbacks?.onConnectionStateChanged) {
+      this.callbacks.onConnectionStateChanged(this.room.state);
+    }
+
+    // Check if any remote participants already have active subscribed tracks
+    this.syncExistingTracks();
+  }
+
+  // ─── Publish Stream ─────────────────────────────────────────────────
+
+  public async publishStream(stream: MediaStream): Promise<void> {
+    if (!this.room) {
+      throw new Error('Não conectado à sala LiveKit. Conecte antes de publicar.');
+    }
+
+    const preset = this.getQualityPreset();
+    const videoTracks = stream.getVideoTracks();
+    const audioTracks = stream.getAudioTracks();
+
+    // Publish video tracks
+    for (const videoTrack of videoTracks) {
+      console.log('[LiveKit] Publishing video track:', videoTrack.label);
+      await this.room.localParticipant.publishTrack(videoTrack, {
+        name: 'screen',
+        source: Track.Source.ScreenShare,
+        videoEncoding: {
+          maxBitrate: preset.maxBitrate * 1000,
+          maxFramerate: preset.frameRate,
+        },
+        screenShareEncoding: {
+          maxBitrate: preset.maxBitrate * 1000,
+          maxFramerate: preset.frameRate,
+        },
+        simulcast: false,
+        videoCodec: 'vp8' as VideoCodec,
+      });
+    }
+
+    // Publish audio tracks
+    for (const audioTrack of audioTracks) {
+      console.log('[LiveKit] Publishing audio track:', audioTrack.label);
+      await this.room.localParticipant.publishTrack(audioTrack, {
+        name: 'screen-audio',
+        source: Track.Source.ScreenShareAudio,
+      });
+    }
+
+    console.log('[LiveKit] Published', videoTracks.length, 'video +', audioTracks.length, 'audio tracks');
+  }
+
+  // ─── Unpublish All Tracks ───────────────────────────────────────────
+
+  public async unpublishAllTracks(): Promise<void> {
+    if (!this.room) return;
+
+    const publications = this.room.localParticipant.trackPublications;
+    for (const [, pub] of publications) {
+      if (pub instanceof LocalTrackPublication && pub.track) {
+        await this.room.localParticipant.unpublishTrack(pub.track.mediaStreamTrack);
+        pub.track.stop();
+      }
+    }
+
+    console.log('[LiveKit] Unpublished all local tracks');
+  }
+
+  // ─── Disconnect ─────────────────────────────────────────────────────
+
+  public async disconnect(): Promise<void> {
+    if (!this.room) return;
+
+    try {
+      await this.unpublishAllTracks();
+      await this.room.disconnect(true);
+    } catch (err) {
+      console.warn('[LiveKit] Error during disconnect:', err);
+    } finally {
+      this.room = null;
+      this.participantStreams.clear();
+      console.log('[LiveKit] Disconnected');
+    }
+  }
+
+  // ─── State Queries ──────────────────────────────────────────────────
+
+  public get connected(): boolean {
+    return this.room?.state === ConnectionState.Connected;
+  }
+
+  public get connectionState(): ConnectionState | null {
+    return this.room?.state ?? null;
+  }
+
+  public get participantCount(): number {
+    if (!this.room) return 0;
+    return this.room.remoteParticipants.size + 1;
+  }
+
+  // ─── Room Event Listeners ───────────────────────────────────────────
+
+  private setupRoomEventListeners(): void {
+    if (!this.room) return;
+
+    // Remote track subscribed — viewer receives a track from SFU
+    this.room.on(
+      RoomEvent.TrackSubscribed,
+      (track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) => {
+        console.log(
+          '[LiveKit] Track subscribed:',
+          track.kind,
+          'from',
+          participant.identity,
+          '| trackSid:',
+          publication.trackSid
+        );
+
+        this.handleTrackAdded(track, participant);
+      }
+    );
+
+    // Remote track unsubscribed
+    this.room.on(
+      RoomEvent.TrackUnsubscribed,
+      (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant) => {
+        console.log('[LiveKit] Track unsubscribed from', participant.identity);
+        this.handleTrackRemoved(track, participant);
+      }
+    );
+
+    // Connection state changes
+    this.room.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
+      console.log('[LiveKit] Connection state changed:', state);
+      if (this.callbacks?.onConnectionStateChanged) {
+        this.callbacks.onConnectionStateChanged(state);
+      }
+    });
+
+    this.room.on(RoomEvent.Reconnecting, () => {
+      console.log('[LiveKit] Reconnecting...');
+    });
+
+    this.room.on(RoomEvent.Reconnected, () => {
+      console.log('[LiveKit] Reconnected!');
+      this.syncExistingTracks();
+    });
+
+    this.room.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+      console.log('[LiveKit] Disconnected. Reason:', reason);
+      if (this.callbacks?.onConnectionStateChanged) {
+        this.callbacks.onConnectionStateChanged(ConnectionState.Disconnected);
+      }
+    });
+
+    this.room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+      console.log('[LiveKit] Participant disconnected:', participant.identity);
+      this.participantStreams.delete(participant.sid);
+      if (this.callbacks?.onRemoteTrackUnsubscribed) {
+        this.callbacks.onRemoteTrackUnsubscribed(participant.sid);
+      }
+    });
+  }
+
+  private handleTrackAdded(track: RemoteTrack, participant: RemoteParticipant) {
+    if (!track.mediaStreamTrack) return;
+
+    let mediaStream = this.participantStreams.get(participant.sid);
+    if (!mediaStream) {
+      mediaStream = new MediaStream();
+      this.participantStreams.set(participant.sid, mediaStream);
+    }
+
+    // Replace any existing track of same kind (e.g. new video track replacing old)
+    const sameKindTracks = track.kind === Track.Kind.Video
+      ? mediaStream.getVideoTracks()
+      : mediaStream.getAudioTracks();
+    sameKindTracks.forEach((t) => mediaStream!.removeTrack(t));
+
+    mediaStream.addTrack(track.mediaStreamTrack);
+
+    if (this.callbacks?.onRemoteTrackSubscribed) {
+      this.callbacks.onRemoteTrackSubscribed({
+        participantId: participant.sid,
+        identity: participant.identity,
+        stream: new MediaStream(mediaStream.getTracks()),
+      });
+    }
+  }
+
+  private handleTrackRemoved(track: RemoteTrack, participant: RemoteParticipant) {
+    const mediaStream = this.participantStreams.get(participant.sid);
+    if (mediaStream && track.mediaStreamTrack) {
+      mediaStream.removeTrack(track.mediaStreamTrack);
+    }
+
+    if (!mediaStream || mediaStream.getTracks().length === 0) {
+      this.participantStreams.delete(participant.sid);
+      if (this.callbacks?.onRemoteTrackUnsubscribed) {
+        this.callbacks.onRemoteTrackUnsubscribed(participant.sid);
+      }
+    } else {
+      if (this.callbacks?.onRemoteTrackSubscribed) {
+        this.callbacks.onRemoteTrackSubscribed({
+          participantId: participant.sid,
+          identity: participant.identity,
+          stream: new MediaStream(mediaStream.getTracks()),
+        });
+      }
+    }
+  }
+
+  private syncExistingTracks() {
+    if (!this.room) return;
+
+    for (const participant of this.room.remoteParticipants.values()) {
+      for (const publication of participant.trackPublications.values()) {
+        if (publication.isSubscribed && publication.track) {
+          this.handleTrackAdded(publication.track, participant);
+        }
+      }
+    }
+  }
+
+  public getParticipants(): Array<{ id: string; identity: string; isLocal: boolean }> {
+    if (!this.room) return [];
+    const list: Array<{ id: string; identity: string; isLocal: boolean }> = [];
+    if (this.room.localParticipant) {
+      list.push({
+        id: this.room.localParticipant.sid || 'local',
+        identity: this.room.localParticipant.identity,
+        isLocal: true
+      });
+    }
+    for (const p of this.room.remoteParticipants.values()) {
+      list.push({
+        id: p.sid,
+        identity: p.identity,
+        isLocal: false
+      });
+    }
+    return list;
+  }
+}
+
+// ─── Singleton ──────────────────────────────────────────────────────────────
+
+export const livekitService = new LiveKitService();

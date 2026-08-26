@@ -1,0 +1,18 @@
+{
+  "name": "@stream-app/native-audio",
+  "version": "1.0.0",
+  "description": "Windows WASAPI Process Loopback Audio Capture with Process Exclusion (Discord)",
+  "main": "index.js",
+  "scripts": {
+    "build": "node-gyp rebuild",
+    "clean": "node-gyp clean"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.0.0",
+    "stream-app-monorepo": "file:../.."
+  },
+  "devDependencies": {
+    "node-gyp": "^10.0.0"
+  },
+  "gypfile": true
+}

@@ -1,0 +1,16 @@
+{
+  "name": "stream-app-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev --workspace=apps/backend",
+    "dev:desktop": "npm run dev --workspace=apps/desktop",
+    "build:shared": "npm run build --workspace=packages/shared",
+    "build:native": "npm run build --workspace=packages/native-audio",
+    "build": "npm run build --workspace=packages/shared && npm run build --workspace=apps/backend && npm run build --workspace=apps/desktop",
+    "package:desktop": "npm run package --workspace=apps/desktop"
+  }
+}
