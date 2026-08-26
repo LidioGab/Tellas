@@ -4,39 +4,45 @@ import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 import path from 'path';
 
+const isVercel = process.env.VERCEL === '1' || process.env.BUILD_TARGET === 'web';
+
 export default defineConfig({
   plugins: [
     react(),
-    electron([
-      {
-        // Main process entry point
-        entry: path.resolve(__dirname, 'src/main/index.ts'),
-        vite: {
-          build: {
-            outDir: path.resolve(__dirname, 'dist/main'),
-            rollupOptions: {
-              external: ['electron', '@stream-app/native-audio']
+    ...(!isVercel
+      ? [
+          electron([
+            {
+              // Main process entry point
+              entry: path.resolve(__dirname, 'src/main/index.ts'),
+              vite: {
+                build: {
+                  outDir: path.resolve(__dirname, 'dist/main'),
+                  rollupOptions: {
+                    external: ['electron', '@stream-app/native-audio']
+                  }
+                }
+              }
+            },
+            {
+              // Preload script entry point
+              entry: path.resolve(__dirname, 'src/preload/index.ts'),
+              onstart(options) {
+                options.reload();
+              },
+              vite: {
+                build: {
+                  outDir: path.resolve(__dirname, 'dist/preload'),
+                  rollupOptions: {
+                    external: ['electron']
+                  }
+                }
+              }
             }
-          }
-        }
-      },
-      {
-        // Preload script entry point
-        entry: path.resolve(__dirname, 'src/preload/index.ts'),
-        onstart(options) {
-          options.reload();
-        },
-        vite: {
-          build: {
-            outDir: path.resolve(__dirname, 'dist/preload'),
-            rollupOptions: {
-              external: ['electron']
-            }
-          }
-        }
-      }
-    ]),
-    renderer()
+          ]),
+          renderer()
+        ]
+      : [])
   ],
   resolve: {
     alias: {
