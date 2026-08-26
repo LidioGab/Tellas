@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { DesktopSource } from '@stream-app/shared';
+import { DesktopSource, WindowsAudioEnvironment } from '@stream-app/shared';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // ─── Phase 1: Screen Capture Sources ──────────────────────────────────────
@@ -9,13 +9,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ─── Phase 2: System Audio Capture ────────────────────────────────────────
 
+  /** Query detected Windows audio environment & active strategy */
+  getAudioEnvironment: (): Promise<WindowsAudioEnvironment> => {
+    return ipcRenderer.invoke('get-audio-environment');
+  },
+
   /** List available DirectShow audio devices (for UI selector) */
   listAudioDevices: (): Promise<{ success: boolean; devices: Array<{ id: string; name: string; type: string }>; error?: string }> => {
     return ipcRenderer.invoke('list-audio-devices');
   },
 
-  /** Start WASAPI/ffmpeg system audio loopback capture */
-  startAudioCapture: (deviceName?: string): Promise<{ success: boolean; format?: { sampleRate: number; channels: number; chunkDurationMs: number }; error?: string }> => {
+  /** Start WASAPI system audio loopback capture */
+  startAudioCapture: (deviceName?: string): Promise<{
+    success: boolean;
+    format?: { sampleRate: number; channels: number; chunkDurationMs?: number };
+    code?: string;
+    strategy?: string;
+    windowsVersion?: string;
+    build?: number;
+    error?: string;
+  }> => {
     return ipcRenderer.invoke('start-audio-capture', deviceName);
   },
 

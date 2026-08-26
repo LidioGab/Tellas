@@ -73,6 +73,11 @@ discordAudioIsolationService.on('error', (err: Error) => {
   }
 });
 
+/** Get centralized Windows audio environment & strategy */
+ipcMain.handle('get-audio-environment', async () => {
+  return discordAudioIsolationService.getAudioEnvironment();
+});
+
 /** List available audio devices (for UI selector) */
 ipcMain.handle('list-audio-devices', async () => {
   try {
@@ -88,6 +93,16 @@ ipcMain.handle('list-audio-devices', async () => {
 ipcMain.handle('start-audio-capture', async (_event, deviceName?: string) => {
   try {
     const result = await discordAudioIsolationService.start(deviceName);
+    if (!result.success) {
+      return {
+        success: false,
+        code: result.code,
+        strategy: result.strategy,
+        windowsVersion: result.windowsVersion,
+        build: result.build,
+        error: result.error
+      };
+    }
     console.log('[Main] Audio capture active:', result);
     return {
       success: true,
@@ -114,6 +129,9 @@ ipcMain.handle('stop-audio-capture', async () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  const env = discordAudioIsolationService.getAudioEnvironment();
+  console.log(`[AudioStrategy] OS: ${env.windowsVersion} build ${env.build} | Process Loopback supported: ${env.processLoopbackSupported} -> ${env.strategy}`);
+
   createWindow();
 
   app.on('activate', () => {
@@ -125,7 +143,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    discordAudioIsolationService.stop().catch(() => {});
+    discordAudioIsolationService.stop().catch(() => { });
     app.quit();
   }
 });

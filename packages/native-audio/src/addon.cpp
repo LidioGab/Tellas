@@ -31,6 +31,7 @@ public:
         }
         if (m_tsfn) {
             m_tsfn.Release();
+            m_tsfn = nullptr;
         }
     }
 
@@ -58,6 +59,7 @@ private:
 
         if (m_tsfn) {
             m_tsfn.Release();
+            m_tsfn = nullptr;
         }
 
         m_tsfn = Napi::ThreadSafeFunction::New(
@@ -69,11 +71,13 @@ private:
         );
 
         auto onData = [this](const float* pcmData, size_t sampleCount) {
+            if (!this->m_capture || !this->m_capture->IsCapturing()) return;
             if (!this->m_tsfn) return;
 
             std::vector<float> bufferCopy(pcmData, pcmData + sampleCount);
 
-            this->m_tsfn.BlockingCall([bufferCopy = std::move(bufferCopy)](Napi::Env env, Napi::Function jsCallback) {
+            this->m_tsfn.NonBlockingCall([bufferCopy = std::move(bufferCopy)](Napi::Env env, Napi::Function jsCallback) {
+                if (env == nullptr || jsCallback.IsEmpty()) return;
                 Napi::Float32Array float32Arr = Napi::Float32Array::New(env, bufferCopy.size());
                 float* dest = float32Arr.Data();
                 std::memcpy(dest, bufferCopy.data(), bufferCopy.size() * sizeof(float));
@@ -94,9 +98,6 @@ private:
         Napi::Env env = info.Env();
         if (m_capture) {
             m_capture->Stop();
-        }
-        if (m_tsfn) {
-            m_tsfn.Release();
         }
         return env.Undefined();
     }

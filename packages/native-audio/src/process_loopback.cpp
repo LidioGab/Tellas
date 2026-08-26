@@ -165,59 +165,60 @@ bool ProcessLoopbackCapture::Start(DWORD targetProcessId, AudioDataCallback onDa
     std::memcpy(m_pwfx, pTempFormat, formatSize);
     CoTaskMemFree(pTempFormat);
 
-    // Release temporary physical endpoint COM objects
-    tempAudioClient.Reset();
-    defaultDevice.Reset();
-    deviceEnumerator.Reset();
+    if (targetProcessId > 0) {
+        // ─── Step 2: Setup Process Loopback Activation Params (Discord Exclusion) ───
+        tempAudioClient.Reset();
+        defaultDevice.Reset();
+        deviceEnumerator.Reset();
 
-    std::cout << "[NativeAudio] Default render endpoint format acquired successfully" << std::endl;
-    std::cout << "[NativeAudio] Sample rate: " << m_pwfx->nSamplesPerSec << std::endl;
-    std::cout << "[NativeAudio] Channels: " << m_pwfx->nChannels << std::endl;
-    std::cout << "[NativeAudio] Bits per sample: " << m_pwfx->wBitsPerSample << std::endl;
+        AUDIOCLIENT_ACTIVATION_PARAMS audioClientParams = {};
+        audioClientParams.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+        audioClientParams.ProcessLoopbackParams.TargetProcessId = targetProcessId;
+        audioClientParams.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
 
-    // ─── Step 2: Setup Process Loopback Activation Params ───────────────────────
-    AUDIOCLIENT_ACTIVATION_PARAMS audioClientParams = {};
-    audioClientParams.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
-    audioClientParams.ProcessLoopbackParams.TargetProcessId = targetProcessId;
-    audioClientParams.ProcessLoopbackParams.ProcessLoopbackMode = (targetProcessId > 0)
-        ? PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE
-        : PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+        PROPVARIANT activateParams = {};
+        activateParams.vt = VT_BLOB;
+        activateParams.blob.cbSize = sizeof(audioClientParams);
+        activateParams.blob.pBlobData = reinterpret_cast<BYTE*>(&audioClientParams);
 
-    PROPVARIANT activateParams = {};
-    activateParams.vt = VT_BLOB;
-    activateParams.blob.cbSize = sizeof(audioClientParams);
-    activateParams.blob.pBlobData = reinterpret_cast<BYTE*>(&audioClientParams);
+        auto completionHandler = Make<ActivateAudioInterfaceCompletionHandler>();
+        ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
 
-    auto completionHandler = Make<ActivateAudioInterfaceCompletionHandler>();
-    ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
+        hr = ActivateAudioInterfaceAsync(
+            VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+            __uuidof(IAudioClient),
+            &activateParams,
+            completionHandler.Get(),
+            &asyncOp
+        );
 
-    hr = ActivateAudioInterfaceAsync(
-        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-        __uuidof(IAudioClient),
-        &activateParams,
-        completionHandler.Get(),
-        &asyncOp
-    );
+        if (FAILED(hr)) {
+            Cleanup();
+            if (needCoUninit) CoUninitialize();
+            std::string hexHr = FormatHResultHex(hr);
+            std::cerr << "[NativeAudio] HRESULT: " << hexHr << std::endl;
+            std::cerr << "[NativeAudio] Step that failed: ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)" << std::endl;
+            if (m_onError) m_onError("ActivateAudioInterfaceAsync failed with HRESULT: " + hexHr);
+            return false;
+        }
 
-    if (FAILED(hr)) {
-        Cleanup();
-        if (needCoUninit) CoUninitialize();
-        std::string hexHr = FormatHResultHex(hr);
-        std::cerr << "[NativeAudio] HRESULT: " << hexHr << std::endl;
-        std::cerr << "[NativeAudio] Step that failed: ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)" << std::endl;
-        if (m_onError) m_onError("ActivateAudioInterfaceAsync failed with HRESULT: " + hexHr);
-        return false;
-    }
-
-    hr = completionHandler->GetActivateResult(m_audioClient);
-    if (FAILED(hr) || !m_audioClient) {
-        Cleanup();
-        if (needCoUninit) CoUninitialize();
-        std::string hexHr = FormatHResultHex(hr);
-        std::cerr << "[NativeAudio] HRESULT: " << hexHr << std::endl;
-        std::cerr << "[NativeAudio] Step that failed: completionHandler->GetActivateResult" << std::endl;
-        if (m_onError) m_onError("GetActivateResult failed with HRESULT: " + hexHr);
-        return false;
+        hr = completionHandler->GetActivateResult(m_audioClient);
+        if (FAILED(hr) || !m_audioClient) {
+            Cleanup();
+            if (needCoUninit) CoUninitialize();
+            std::string hexHr = FormatHResultHex(hr);
+            std::cerr << "[NativeAudio] HRESULT: " << hexHr << std::endl;
+            std::cerr << "[NativeAudio] Step that failed: completionHandler->GetActivateResult" << std::endl;
+            if (m_onError) m_onError("GetActivateResult failed with HRESULT: " + hexHr);
+            return false;
+        }
+    } else {
+        // ─── Step 2 Alt: Use Standard Default Device Loopback (Full System Audio) ───
+        m_audioClient = tempAudioClient;
+        tempAudioClient.Reset();
+        defaultDevice.Reset();
+        deviceEnumerator.Reset();
+        std::cout << "[NativeAudio] Using standard WASAPI default render endpoint loopback (Full System Audio)" << std::endl;
     }
 
     // ─── Step 3: Initialize Virtual Process Loopback IAudioClient ──────────────
@@ -288,25 +289,28 @@ bool ProcessLoopbackCapture::Start(DWORD targetProcessId, AudioDataCallback onDa
 }
 
 void ProcessLoopbackCapture::Stop() {
+    std::cout << "[NativeAudio] ProcessLoopbackCapture::Stop called" << std::endl;
     if (!m_isCapturing.exchange(false)) {
+        std::cout << "[NativeAudio] Not capturing, returning from Stop" << std::endl;
         return;
     }
 
     if (m_hStopEvent) {
+        std::cout << "[NativeAudio] Setting stop event" << std::endl;
         SetEvent(m_hStopEvent);
     }
 
     if (m_captureThread.joinable()) {
+        std::cout << "[NativeAudio] Joining capture thread..." << std::endl;
         m_captureThread.join();
+        std::cout << "[NativeAudio] Capture thread joined." << std::endl;
     }
 
     Cleanup();
+    std::cout << "[NativeAudio] Stop finished." << std::endl;
 }
 
 void ProcessLoopbackCapture::Cleanup() {
-    if (m_audioClient) {
-        m_audioClient->Stop();
-    }
     m_captureClient.Reset();
     m_audioClient.Reset();
 
@@ -335,20 +339,20 @@ void ProcessLoopbackCapture::CaptureThreadFunc() {
         } else if (waitResult == WAIT_OBJECT_0 + 1) {
             // Audio sample ready
             UINT32 nextPacketSize = 0;
-            HRESULT hrPacket = m_captureClient->GetNextPacketSize(&nextPacketSize);
+            HRESULT hrPacket = m_captureClient ? m_captureClient->GetNextPacketSize(&nextPacketSize) : E_FAIL;
 
             while (SUCCEEDED(hrPacket) && nextPacketSize > 0 && m_isCapturing.load()) {
                 BYTE* pData = nullptr;
                 UINT32 numFramesAvailable = 0;
                 DWORD flags = 0;
 
-                HRESULT hrBuffer = m_captureClient->GetBuffer(
+                HRESULT hrBuffer = m_captureClient ? m_captureClient->GetBuffer(
                     &pData,
                     &numFramesAvailable,
                     &flags,
                     nullptr,
                     nullptr
-                );
+                ) : E_FAIL;
 
                 if (SUCCEEDED(hrBuffer) && pData && numFramesAvailable > 0) {
                     if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT)) {
@@ -364,13 +368,21 @@ void ProcessLoopbackCapture::CaptureThreadFunc() {
                         }
                     }
 
-                    m_captureClient->ReleaseBuffer(numFramesAvailable);
+                    if (m_captureClient) {
+                        m_captureClient->ReleaseBuffer(numFramesAvailable);
+                    }
                 }
 
-                hrPacket = m_captureClient->GetNextPacketSize(&nextPacketSize);
+                hrPacket = m_captureClient ? m_captureClient->GetNextPacketSize(&nextPacketSize) : E_FAIL;
             }
         }
     }
+
+    if (m_audioClient) {
+        m_audioClient->Stop();
+    }
+    m_captureClient.Reset();
+    m_audioClient.Reset();
 
     if (hTask) {
         AvRevertMmThreadCharacteristics(hTask);

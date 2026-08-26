@@ -1,5 +1,8 @@
 #pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -114,7 +117,7 @@ public:
         for (UINT32 outIdx = 0; outIdx < outputFrames; ++outIdx) {
             const double inPos = outIdx / resampleRatio;
             const UINT32 inIdx0 = static_cast<UINT32>(std::floor(inPos));
-            const UINT32 inIdx1 = std::min(inIdx0 + 1, inputFrames - 1);
+            const UINT32 inIdx1 = (std::min)(inIdx0 + 1, inputFrames - 1);
             const float frac = static_cast<float>(inPos - inIdx0);
 
             const float l0 = decodedStereo[inIdx0 * 2];

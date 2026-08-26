@@ -15,21 +15,34 @@ try {
     process.resourcesPath ? path.join(process.resourcesPath, 'packages', 'native-audio', 'index.js') : null,
     process.resourcesPath ? path.join(process.resourcesPath, 'native_audio.node') : null,
     path.join(__dirname, '..', '..', '..', 'packages', 'native-audio', 'index.js'),
-    path.join(process.cwd(), 'packages', 'native-audio', 'index.js'),
-    'C:\\Users\\gabri\\OneDrive\\Documentos\\CompartilhamentoTela\\packages\\native-audio\\index.js'
+    path.join(process.cwd(), 'packages', 'native-audio', 'index.js')
   ].filter(Boolean) as string[];
 
   for (const candidate of candidatePaths) {
     try {
       NativeAudioModule = require(candidate);
       if (NativeAudioModule) break;
-    } catch (_) {}
+    } catch (_) { }
   }
+}
+
+import { AudioCaptureStrategy, WindowsAudioEnvironment } from '@stream-app/shared';
+import { getWindowsAudioEnvironment } from './AudioCaptureStrategy';
+
+export interface AudioCaptureStartResult {
+  success: boolean;
+  mode: string;
+  discordDetected?: boolean;
+  code?: string;
+  strategy?: AudioCaptureStrategy;
+  windowsVersion?: string;
+  build?: number;
+  error?: string;
 }
 
 export class DiscordAudioIsolationService extends EventEmitter {
   private isCapturing = false;
-  private currentMode: 'NATIVE_PROCESS_LOOPBACK' | 'FALLBACK' = 'FALLBACK';
+  private currentMode: 'NATIVE_PROCESS_LOOPBACK' | 'FALLBACK' | 'NONE' = 'NONE';
   private nativeInstance: any = null;
   private readonly sampleRate = 48000;
   private readonly channels = 2;
@@ -57,7 +70,7 @@ export class DiscordAudioIsolationService extends EventEmitter {
           return true;
         }
       }
-    } catch (_) {}
+    } catch (_) { }
 
     if (NativeAudioModule && typeof NativeAudioModule.ProcessLoopbackCapture?.isSupported === 'function') {
       return NativeAudioModule.ProcessLoopbackCapture.isSupported();
@@ -67,102 +80,123 @@ export class DiscordAudioIsolationService extends EventEmitter {
   }
 
   /**
-   * Start audio capture with automatic Discord isolation
+   * Query the centralized Windows audio environment and capture strategy.
    */
-  public async start(deviceName?: string): Promise<{ success: boolean; mode: string; discordDetected: boolean }> {
+  public getAudioEnvironment(): WindowsAudioEnvironment {
+    return getWindowsAudioEnvironment(this.isProcessLoopbackSupported());
+  }
+
+  /**
+   * Start audio capture with centralized strategy decision.
+   */
+  public async start(deviceName?: string): Promise<AudioCaptureStartResult> {
     // Single producer guarantee: Stop any active capture first
     if (this.isCapturing) {
       await this.stop();
     }
 
-    const isLoopbackSupported = this.isProcessLoopbackSupported();
+    const env = this.getAudioEnvironment();
+    console.log(
+      `[AudioStrategy] OS: ${env.windowsVersion} build ${env.build} | Process Loopback: ${env.processLoopbackSupported} -> ${env.strategy}`
+    );
+
+    // ─── Case 1: Windows build requires Virtual Audio (e.g. Win 10 < 20348) ───
+    if (env.strategy === AudioCaptureStrategy.VIRTUAL_AUDIO_REQUIRED) {
+      console.warn(
+        `[AudioCapture] System audio isolation requires Virtual Audio mode on ${env.windowsVersion} build ${env.build}`
+      );
+      this.currentMode = 'NONE';
+      return {
+        success: false,
+        code: 'VIRTUAL_AUDIO_REQUIRED',
+        strategy: AudioCaptureStrategy.VIRTUAL_AUDIO_REQUIRED,
+        windowsVersion: env.windowsVersion,
+        build: env.build,
+        mode: 'NONE',
+        discordDetected: false,
+        error: 'Esta versão do Windows requer o modo de áudio compatível com Windows 10 para transmitir o som do sistema sem incluir o Discord. Esse modo ainda está sendo preparado.'
+      };
+    }
+
+    // ─── Case 2: Windows build supports Process Loopback ─────────────────────
     const isAddonAvailable = NativeAudioModule && NativeAudioModule.isNativeAddonAvailable();
 
-    // ─── Step 1: Addon availability logs ───────────────────────────────
-    if (isAddonAvailable) {
-      console.log('[AudioIsolation] Native addon loaded successfully');
-    } else {
+    if (!isAddonAvailable) {
       const loadError = NativeAudioModule ? NativeAudioModule.getLoadError() : null;
-      console.log(`[AudioIsolation] Native addon unavailable${loadError ? ` (Reason: ${loadError.message})` : ' (Binary native_audio.node not built yet)'}`);
+      console.error(
+        `[AudioIsolation] Native addon unavailable: ${loadError ? loadError.message : 'Binary not found'}`
+      );
+      return {
+        success: false,
+        code: 'ADDON_UNAVAILABLE',
+        strategy: AudioCaptureStrategy.PROCESS_LOOPBACK,
+        windowsVersion: env.windowsVersion,
+        build: env.build,
+        mode: 'NONE',
+        discordDetected: false,
+        error: 'Addon nativo de captura de áudio indisponível no sistema.'
+      };
     }
 
-    // ─── Step 2: Process Loopback support log ──────────────────────────
-    if (isLoopbackSupported) {
-      console.log('[AudioIsolation] Process Loopback supported: true');
-    } else {
-      console.log('[AudioIsolation] Process Loopback supported: false');
-    }
-
-    // ─── Step 3: Detect Discord process ────────────────────────────────
+    // Detect Discord process tree
     let discordInfo: DiscordProcessInfo | null = null;
     try {
       discordInfo = await DiscordProcessDetector.detectDiscord();
       if (discordInfo) {
-        console.log(`[AudioIsolation] Discord process found: PID ${discordInfo.allPids.join(', ')} (${discordInfo.name})`);
         console.log(`[AudioIsolation] Discord root process selected: PID ${discordInfo.rootPid}`);
       } else {
-        console.log('[AudioIsolation] Discord process not detected (Discord is not running).');
+        console.log('[AudioIsolation] Discord process not detected (capturing system audio without exclusions).');
       }
     } catch (detectErr: any) {
-      console.warn('[AudioIsolation] Process detection error:', detectErr.message);
+      console.warn('[AudioIsolation] Discord detection error:', detectErr.message);
     }
 
-    // ─── Step 4: Attempt Native WASAPI Process Loopback ────────────────
-    if (isLoopbackSupported && isAddonAvailable) {
-      try {
-        console.log('[AudioIsolation] Starting PROCESS_LOOPBACK_MODE_EXCLUDE_PROCESS_TREE');
-        const nativeCapture = new NativeAudioModule.ProcessLoopbackCapture();
-        const targetPid = discordInfo ? discordInfo.rootPid : 0;
-
-        const started = nativeCapture.start(targetPid, (pcmBuffer: Float32Array) => {
-          this.emit('data', pcmBuffer);
-        });
-
-        if (started) {
-          this.nativeInstance = nativeCapture;
-          this.isCapturing = true;
-          this.currentMode = 'NATIVE_PROCESS_LOOPBACK';
-
-          console.log('[AudioIsolation] Native WASAPI capture is ACTIVE');
-          console.log('[AudioIsolation] Audio source currently in use: NATIVE_PROCESS_LOOPBACK');
-          return { success: true, mode: this.currentMode, discordDetected: discordInfo !== null };
-        } else {
-          console.warn('[AudioIsolation] Native WASAPI start failed. Proceeding to fallback.');
-        }
-      } catch (nativeErr: any) {
-        console.warn('[AudioIsolation] Native WASAPI exception:', nativeErr.message);
-      }
-    }
-
-    // ─── Step 5: Fallback to FFmpeg/DirectShow ──────────────────────────
-    console.log('[AudioIsolation] FFmpeg/DirectShow fallback is ACTIVE');
-    console.log('[AudioIsolation] Audio source currently in use: FALLBACK');
-    return this.startFallback(deviceName, discordInfo !== null);
-  }
-
-  /** Starts the ffmpeg/DirectShow fallback capture */
-  private async startFallback(deviceName?: string, discordDetected = false): Promise<{ success: boolean; mode: string; discordDetected: boolean }> {
     try {
-      audioCaptureService.removeAllListeners('data');
-      audioCaptureService.removeAllListeners('error');
+      console.log('[AudioIsolation] Starting PROCESS_LOOPBACK_MODE_EXCLUDE_PROCESS_TREE');
+      const nativeCapture = new NativeAudioModule.ProcessLoopbackCapture();
+      const targetPid = discordInfo ? discordInfo.rootPid : 0;
 
-      audioCaptureService.on('data', (buffer: Float32Array) => {
-        this.emit('data', buffer);
+      const started = nativeCapture.start(targetPid, (pcmBuffer: Float32Array) => {
+        this.emit('data', pcmBuffer);
       });
 
-      audioCaptureService.on('error', (err: Error) => {
-        this.emit('error', err);
-      });
+      if (started) {
+        this.nativeInstance = nativeCapture;
+        this.isCapturing = true;
+        this.currentMode = 'NATIVE_PROCESS_LOOPBACK';
 
-      await audioCaptureService.start(deviceName);
-      this.isCapturing = true;
-      this.currentMode = 'FALLBACK';
-
-      return { success: true, mode: this.currentMode, discordDetected };
-    } catch (fallbackErr: any) {
-      this.isCapturing = false;
-      console.error('[AudioIsolation] All audio capture methods failed:', fallbackErr.message);
-      throw fallbackErr;
+        console.log('[AudioIsolation] Native WASAPI capture is ACTIVE');
+        return {
+          success: true,
+          mode: this.currentMode,
+          discordDetected: discordInfo !== null,
+          strategy: AudioCaptureStrategy.PROCESS_LOOPBACK,
+          windowsVersion: env.windowsVersion,
+          build: env.build
+        };
+      } else {
+        console.error('[AudioIsolation] Native WASAPI start returned false.');
+        return {
+          success: false,
+          code: 'WASAPI_START_FAILED',
+          mode: 'NONE',
+          strategy: AudioCaptureStrategy.PROCESS_LOOPBACK,
+          windowsVersion: env.windowsVersion,
+          build: env.build,
+          error: 'Falha ao iniciar a captura WASAPI Process Loopback.'
+        };
+      }
+    } catch (nativeErr: any) {
+      console.error('[AudioIsolation] Native WASAPI exception:', nativeErr.message);
+      return {
+        success: false,
+        code: 'WASAPI_EXCEPTION',
+        mode: 'NONE',
+        strategy: AudioCaptureStrategy.PROCESS_LOOPBACK,
+        windowsVersion: env.windowsVersion,
+        build: env.build,
+        error: nativeErr.message
+      };
     }
   }
 
@@ -171,7 +205,7 @@ export class DiscordAudioIsolationService extends EventEmitter {
     if (this.nativeInstance) {
       try {
         this.nativeInstance.stop();
-      } catch (_) {}
+      } catch (_) { }
       this.nativeInstance = null;
     }
 

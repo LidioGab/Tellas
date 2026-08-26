@@ -2,8 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { socket } from './services/socket';
 import { livekitService, type RemoteStreamInfo } from './services/livekitService';
 import { audioCaptureManager } from './audio/AudioCaptureManager';
-import type { DesktopSource } from '@stream-app/shared';
-import { VIDEO_QUALITY_PRESETS } from '@stream-app/shared';
+import { DesktopSource, VIDEO_QUALITY_PRESETS, WindowsAudioEnvironment, AudioCaptureStrategy } from '@stream-app/shared';
 import { ConnectionState } from 'livekit-client';
 import { SourcePickerModal } from './components/SourcePickerModal';
 import { StreamPublisher } from './components/StreamPublisher';
@@ -27,7 +26,9 @@ import {
   Crown,
   Volume2,
   ChevronDown,
-  X
+  X,
+  AlertTriangle,
+  Info
 } from 'lucide-react';
 
 interface Member {
@@ -59,6 +60,10 @@ export const App: React.FC = () => {
   const [isMembersMenuOpen, setIsMembersMenuOpen] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
 
+  // Audio environment & strategy
+  const [audioEnv, setAudioEnv] = useState<WindowsAudioEnvironment | null>(null);
+  const [audioWarningMessage, setAudioWarningMessage] = useState<string | null>(null);
+
   // Stream state
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedSource, setSelectedSource] = useState<DesktopSource | null>(null);
@@ -71,6 +76,20 @@ export const App: React.FC = () => {
   const [qualityPreset, setQualityPreset] = useState<string>('1080p30');
 
   const membersMenuRef = useRef<HTMLDivElement>(null);
+
+  // Query audio environment on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI?.getAudioEnvironment) {
+      window.electronAPI.getAudioEnvironment()
+        .then((env) => {
+          console.log('[App] Detected Windows Audio Environment:', env);
+          setAudioEnv(env);
+        })
+        .catch((err) => {
+          console.warn('[App] Failed to fetch audio environment:', err);
+        });
+    }
+  }, []);
 
   // Handle nickname persistence
   const handleNameChange = (name: string) => {
@@ -242,10 +261,22 @@ export const App: React.FC = () => {
     let finalStream = videoStream;
     const identity = getEffectiveIdentity();
 
-    // Try to add WASAPI system audio (Phase 2 — Electron only)
+    // Try to add system audio (Phase 2 — Electron only)
     if (window.electronAPI?.startAudioCapture) {
       try {
-        await audioCaptureManager.start(48000);
+        const audioRes = await audioCaptureManager.start(48000);
+        if (!audioRes.success) {
+          if (audioRes.code === 'VIRTUAL_AUDIO_REQUIRED') {
+            setAudioWarningMessage(
+              'O seu Windows precisa do modo de áudio compatível com Windows 10 para transmitir o som do sistema sem incluir o Discord. Esse modo ainda está sendo preparado.'
+            );
+          } else {
+            console.warn('[App] System audio capture returned:', audioRes.error);
+          }
+        } else {
+          setAudioWarningMessage(null);
+        }
+
         const audioTrack = audioCaptureManager.getAudioTrack();
         if (audioTrack) {
           console.log('[App] WASAPI audio track obtained:', audioTrack.id);
@@ -413,6 +444,7 @@ export const App: React.FC = () => {
 
   const currentPreset = VIDEO_QUALITY_PRESETS[qualityPreset];
   const hasAnyRemoteStream = remoteStreams.size > 0;
+  const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
 
   return (
     <div className="flex flex-col h-screen bg-[#1E1F22] text-[#DBDEE1] select-none font-sans overflow-hidden">
@@ -584,6 +616,40 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
+              {/* Diagnostic Audio Strategy Card (Temporary for tests) */}
+              {audioEnv && (
+                <div className="bg-[#1E1F22] rounded-xl p-3 border border-[#35373C] text-left text-xs space-y-1.5 shadow-inner">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-[#949BA4] font-medium">Sistema detectado:</span>
+                    <span className="font-bold text-[#F2F3F5]">
+                      {audioEnv.windowsVersion} — Build {audioEnv.build}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-[#949BA4] font-medium">Modo de áudio:</span>
+                    <span
+                      className={`font-semibold ${
+                        audioEnv.strategy === AudioCaptureStrategy.PROCESS_LOOPBACK
+                          ? 'text-[#23A55A]'
+                          : 'text-[#F0B232]'
+                      }`}
+                    >
+                      {audioEnv.strategy === AudioCaptureStrategy.PROCESS_LOOPBACK
+                        ? 'Captura nativa (PROCESS_LOOPBACK)'
+                        : 'Modo Windows 10 necessário (VIRTUAL_AUDIO_REQUIRED)'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-[#949BA4] font-medium">Isolamento do Discord:</span>
+                    <span className="text-[#949BA4]">
+                      {audioEnv.strategy === AudioCaptureStrategy.PROCESS_LOOPBACK
+                        ? 'Disponível'
+                        : 'Aguardando modo compatível com Windows 10'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Participant Name Input */}
               <div className="space-y-1">
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-[#949BA4]">
@@ -649,60 +715,106 @@ export const App: React.FC = () => {
         ) : (
           /* In Room View — Unified Discord Stage */
           <div className="h-full flex flex-col gap-2.5">
-            {/* Stream Action Toolbar */}
-            <div className="flex items-center justify-between bg-[#2B2D31] px-4 py-2 rounded-xl border border-[#1E1F22] shadow-sm">
-              <div className="flex items-center gap-2.5">
-                {isStreaming ? (
-                  <span className="flex items-center gap-1 text-xs font-bold text-white bg-[#DA373C] px-2 py-0.5 rounded shadow-sm">
-                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
-                    AO VIVO
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1.5 text-xs font-semibold text-[#949BA4]">
-                    <Tv className="w-3.5 h-3.5 text-[#80848E]" />
-                    {isHost ? 'Você é o Host da sala' : 'Aguardando transmissão'}
-                  </span>
-                )}
+            {/* Warning Message Banner if Virtual Audio Required or Audio Error */}
+            {audioWarningMessage && (
+              <div className="flex items-start justify-between gap-3 bg-[#F0B232]/15 border border-[#F0B232]/40 rounded-xl p-3 text-xs text-[#F2F3F5] shadow-md animate-in fade-in duration-200">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-[#F0B232] shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-[#F2F3F5]">{audioWarningMessage}</p>
+                    {audioEnv && (
+                      <p className="text-[10px] text-[#949BA4] mt-1">
+                        {audioEnv.windowsVersion} • Build {audioEnv.build} • Strategy: {audioEnv.strategy}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAudioWarningMessage(null)}
+                  className="text-[#949BA4] hover:text-white p-1 rounded hover:bg-white/10 transition"
+                  title="Fechar"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
+            )}
 
-              <div className="flex items-center gap-2">
-                {/* Quality Selector */}
-                <div className="flex items-center gap-1 bg-[#1E1F22] px-2 py-1 rounded-md border border-[#313338]">
-                  <Settings className="w-3 h-3 text-[#949BA4]" />
-                  <select
-                    value={qualityPreset}
-                    onChange={(e) => handleQualityChange(e.target.value)}
-                    disabled={isStreaming}
-                    className="bg-transparent text-xs text-[#F2F3F5] font-semibold focus:outline-none disabled:opacity-50 cursor-pointer"
-                  >
-                    {Object.entries(VIDEO_QUALITY_PRESETS).map(([key, preset]) => (
-                      <option key={key} value={key} className="bg-[#2B2D31] text-white">
-                        {preset.label}
-                      </option>
-                    ))}
-                  </select>
+            {/* Stream Action Toolbar — hidden on mobile, desktop/host only */}
+            {!isMobile && (
+              <div className="flex items-center justify-between bg-[#2B2D31] px-4 py-2 rounded-xl border border-[#1E1F22] shadow-sm">
+                <div className="flex items-center gap-2.5">
+                  {isStreaming ? (
+                    <span className="flex items-center gap-1 text-xs font-bold text-white bg-[#DA373C] px-2 py-0.5 rounded shadow-sm">
+                      <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                      AO VIVO
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1.5 text-xs font-semibold text-[#949BA4]">
+                      <Tv className="w-3.5 h-3.5 text-[#80848E]" />
+                      {isHost ? 'Você é o Host da sala' : 'Aguardando transmissão'}
+                    </span>
+                  )}
+
+                  {/* Compact Diagnostic Pill */}
+                  {audioEnv && (
+                    <div className="hidden md:flex items-center gap-1.5 bg-[#1E1F22] px-2.5 py-1 rounded-md border border-[#313338] text-[11px]">
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          audioEnv.strategy === AudioCaptureStrategy.PROCESS_LOOPBACK
+                            ? 'bg-[#23A55A]'
+                            : 'bg-[#F0B232]'
+                        }`}
+                      ></span>
+                      <span className="text-[#949BA4]">
+                        {audioEnv.windowsVersion} • Build {audioEnv.build} (
+                        {audioEnv.strategy === AudioCaptureStrategy.PROCESS_LOOPBACK
+                          ? 'Captura nativa'
+                          : 'Modo Win10 necessário'}
+                        )
+                      </span>
+                    </div>
+                  )}
                 </div>
 
-                {!isStreaming && (
-                  <>
-                    <button
-                      onClick={handleStartNativeCapture}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#35373C] hover:bg-[#404249] text-[#F2F3F5] font-semibold text-xs transition"
+                <div className="flex items-center gap-2">
+                  {/* Quality Selector */}
+                  <div className="flex items-center gap-1 bg-[#1E1F22] px-2 py-1 rounded-md border border-[#313338]">
+                    <Settings className="w-3 h-3 text-[#949BA4]" />
+                    <select
+                      value={qualityPreset}
+                      onChange={(e) => handleQualityChange(e.target.value)}
+                      disabled={isStreaming}
+                      className="bg-transparent text-xs text-[#F2F3F5] font-semibold focus:outline-none disabled:opacity-50 cursor-pointer"
                     >
-                      <ScreenShare className="w-3.5 h-3.5 text-[#5865F2]" />
-                      Seletor do Windows
-                    </button>
-                    <button
-                      onClick={() => setIsModalOpen(true)}
-                      className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#5865F2] hover:bg-[#4752C4] text-white font-bold text-xs shadow-sm transition"
-                    >
-                      <Monitor className="w-3.5 h-3.5" />
-                      Transmitir Tela
-                    </button>
-                  </>
-                )}
+                      {Object.entries(VIDEO_QUALITY_PRESETS).map(([key, preset]) => (
+                        <option key={key} value={key} className="bg-[#2B2D31] text-white">
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {!isStreaming && (
+                    <>
+                      <button
+                        onClick={handleStartNativeCapture}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#35373C] hover:bg-[#404249] text-[#F2F3F5] font-semibold text-xs transition"
+                      >
+                        <ScreenShare className="w-3.5 h-3.5 text-[#5865F2]" />
+                        Seletor do Windows
+                      </button>
+                      <button
+                        onClick={() => setIsModalOpen(true)}
+                        className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#5865F2] hover:bg-[#4752C4] text-white font-bold text-xs shadow-sm transition"
+                      >
+                        <Monitor className="w-3.5 h-3.5" />
+                        Transmitir Tela
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Video Stream Stage — Adaptive Discord View */}
             <div className="flex-1 overflow-hidden">
@@ -733,18 +845,46 @@ export const App: React.FC = () => {
               ) : (
                 /* Scenario 3: Nobody is Streaming (Clean Waiting Stage) */
                 <div className="h-full bg-[#2B2D31] rounded-xl p-6 flex flex-col items-center justify-center text-center border border-[#1E1F22]">
+                  {/* Subtle Audio Status Pill */}
+                  {audioEnv && (
+                    <div className="inline-flex items-center gap-2 bg-[#1E1F22] px-3 py-1 rounded-full border border-[#35373C] text-[11px] text-[#949BA4] mb-3">
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          audioEnv.strategy === AudioCaptureStrategy.PROCESS_LOOPBACK
+                            ? 'bg-[#23A55A]'
+                            : 'bg-[#F0B232]'
+                        }`}
+                      ></span>
+                      <span className="font-bold text-[#F2F3F5]">
+                        {audioEnv.windowsVersion} • Build {audioEnv.build}
+                      </span>
+                      <span>•</span>
+                      <span>
+                        {audioEnv.strategy === AudioCaptureStrategy.PROCESS_LOOPBACK
+                          ? 'Captura nativa'
+                          : 'Modo Windows 10 necessário'}
+                      </span>
+                      <span>•</span>
+                      <span>
+                        {audioEnv.strategy === AudioCaptureStrategy.PROCESS_LOOPBACK
+                          ? 'Discord isolation disponível'
+                          : 'Virtual Audio necessário'}
+                      </span>
+                    </div>
+                  )}
+
                   <div className="w-14 h-14 rounded-2xl bg-[#1E1F22] flex items-center justify-center text-[#5865F2] mb-3 shadow-sm">
                     <Tv className="w-7 h-7" />
                   </div>
                   <h3 className="text-base font-bold text-[#F2F3F5] mb-1">
-                    {isHost ? 'Pronto para Transmitir' : 'Aguardando o Streamer Iniciar'}
+                    {isHost && !isMobile ? 'Pronto para Transmitir' : 'Aguardando o Streamer Iniciar'}
                   </h3>
                   <p className="text-xs text-[#949BA4] max-w-xs mb-4">
-                    {isHost
+                    {isHost && !isMobile
                       ? 'Compartilhe sua tela ou janela para que todos na sala possam assistir com áudio limpo.'
                       : 'O streamer ainda não iniciou a transmissão. O vídeo aparecerá aqui automaticamente.'}
                   </p>
-                  {isHost && (
+                  {isHost && !isMobile && (
                     <div className="flex items-center gap-2">
                       <button
                         onClick={handleStartNativeCapture}

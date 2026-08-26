@@ -75,3 +75,20 @@ export interface SignalingEvents {
   'stream-started': (payload: { streamerSocketId: string }) => void;
   'stream-stopped': (payload: { streamerSocketId: string }) => void;
 }
+
+// ─── Windows Audio Environment & Strategy ───────────────────────────────────
+
+export enum AudioCaptureStrategy {
+  PROCESS_LOOPBACK = 'PROCESS_LOOPBACK',
+  VIRTUAL_AUDIO_REQUIRED = 'VIRTUAL_AUDIO_REQUIRED',
+}
+
+export interface WindowsAudioEnvironment {
+  platform: string;
+  release: string;
+  build: number;
+  windowsVersion: 'Windows 10' | 'Windows 11' | 'Unknown';
+  processLoopbackSupported: boolean;
+  strategy: AudioCaptureStrategy;
+}
+

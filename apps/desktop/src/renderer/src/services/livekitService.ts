@@ -37,9 +37,9 @@ export interface LiveKitCallbacks {
 
 function getBackendUrl(): string {
   const envUrl = import.meta.env.VITE_BACKEND_URL as string | undefined;
-  if (envUrl) return envUrl;
-  if (typeof window !== 'undefined' && window.location && window.location.hostname) {
-    return `http://${window.location.hostname}:3001`;
+  if (envUrl && envUrl.trim().length > 0) return envUrl.trim();
+  if (typeof window !== 'undefined' && window.location && window.location.origin && !window.location.origin.startsWith('file://')) {
+    return window.location.origin;
   }
   return 'http://localhost:3001';
 }
@@ -171,11 +171,16 @@ export class LiveKitService {
   public async unpublishAllTracks(): Promise<void> {
     if (!this.room) return;
 
-    const publications = this.room.localParticipant.trackPublications;
-    for (const [, pub] of publications) {
+    const publications = Array.from(this.room.localParticipant.trackPublications.values());
+    for (const pub of publications) {
       if (pub instanceof LocalTrackPublication && pub.track) {
-        await this.room.localParticipant.unpublishTrack(pub.track.mediaStreamTrack);
-        pub.track.stop();
+        const track = pub.track;
+        try {
+          await this.room.localParticipant.unpublishTrack(track.mediaStreamTrack);
+          track.stop();
+        } catch (err) {
+          console.warn('[LiveKit] Error unpublishing track:', err);
+        }
       }
     }
 

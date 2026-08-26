@@ -2,9 +2,24 @@ import { ChildProcess, spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import * as path from 'path';
 
-// ffmpeg-static provides a pre-compiled ffmpeg binary for Windows — no install needed
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const ffmpegPath: string = require('ffmpeg-static') as string;
+import * as fs from 'fs';
+
+function getFfmpegPath(): string {
+  if (process.resourcesPath) {
+    const unpacked = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'ffmpeg-static', 'ffmpeg.exe');
+    if (fs.existsSync(unpacked)) {
+      return unpacked;
+    }
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const raw = require('ffmpeg-static') as string;
+    if (raw) return raw.replace('app.asar', 'app.asar.unpacked');
+  } catch (_) { }
+  return 'ffmpeg';
+}
+
+const ffmpegPath: string = getFfmpegPath();
 
 export interface AudioDevice {
   id: string;
@@ -20,6 +35,22 @@ export class AudioCaptureService extends EventEmitter {
   // PCM S16LE: 2 bytes/sample * channels * sampleRate = bytes/sec
   // We want ~20ms chunks → 20ms * 48000 * 2 * 2 = 3840 bytes
   private readonly CHUNK_BYTES = 3840;
+
+  /**
+   * Helper to check if a device is a microphone or input device.
+   */
+  private static isMicrophoneDevice(name: string): boolean {
+    const lower = name.toLowerCase();
+    return (
+      lower.includes('microfone') ||
+      lower.includes('microphone') ||
+      lower.includes('microf') ||
+      lower.includes('droidcam') ||
+      lower.includes('mic array') ||
+      lower.includes('entrada') ||
+      lower.includes('input')
+    );
+  }
 
   /**
    * Lists available DirectShow audio capture devices on Windows.
@@ -40,30 +71,48 @@ export class AudioCaptureService extends EventEmitter {
 
       ffmpeg.on('close', () => {
         const devices: AudioDevice[] = [];
-        // Parse ffmpeg DirectShow device list from stderr
-        // Audio devices appear after "DirectShow audio devices"
-        const audioSection = stderr.split('DirectShow audio devices')[1] || '';
-        const lines = audioSection.split('\n');
+        const lines = stderr.split(/\r?\n/);
 
-        let inAudioSection = true;
-        for (const line of lines) {
-          if (line.includes('DirectShow video devices')) {
-            inAudioSection = false;
+        let isAudioSection = false;
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+
+          if (line.includes('DirectShow audio devices')) {
+            isAudioSection = true;
+            continue;
           }
-          if (!inAudioSection) continue;
+          if (line.includes('DirectShow video devices')) {
+            isAudioSection = false;
+            continue;
+          }
 
-          // Match lines like: [dshow @ ...] "Device Name"
-          const match = line.match(/"([^"]+)"\s*$/);
-          if (match) {
-            const name = match[1].trim();
-            if (name && !name.includes('@device')) {
+          // Modern FFmpeg: "Device Name" (audio)
+          const modernMatch = line.match(/"([^"]+)"\s+\(audio\)/i);
+          if (modernMatch) {
+            const name = modernMatch[1].trim();
+            if (name && !name.startsWith('@device') && !devices.some(d => d.name === name)) {
               devices.push({
                 id: name,
                 name,
-                type: name.toLowerCase().includes('microfone') || name.toLowerCase().includes('microphone')
-                  ? 'input'
-                  : 'output'
+                type: AudioCaptureService.isMicrophoneDevice(name) ? 'input' : 'output'
               });
+            }
+            continue;
+          }
+
+          // Legacy FFmpeg: section header followed by quoted names
+          if (isAudioSection && !line.includes('(video)')) {
+            const legacyMatch = line.match(/"([^"]+)"/);
+            if (legacyMatch) {
+              const name = legacyMatch[1].trim();
+              if (name && !name.startsWith('@device') && !devices.some(d => d.name === name)) {
+                devices.push({
+                  id: name,
+                  name,
+                  type: AudioCaptureService.isMicrophoneDevice(name) ? 'input' : 'output'
+                });
+              }
             }
           }
         }
@@ -73,7 +122,9 @@ export class AudioCaptureService extends EventEmitter {
 
       // Kill after 3s if it hangs
       setTimeout(() => {
-        ffmpeg.kill();
+        try {
+          ffmpeg.kill();
+        } catch (_) {}
       }, 3000);
     });
   }
@@ -127,7 +178,6 @@ export class AudioCaptureService extends EventEmitter {
 
     this.ffmpegProcess.stderr!.on('data', (data: Buffer) => {
       const msg = data.toString();
-      // Only log actual errors, not ffmpeg's normal verbose output
       if (msg.includes('Error') || msg.includes('error') || msg.includes('Invalid')) {
         console.error('[AudioCapture] ffmpeg stderr:', msg.trim());
       }
@@ -151,7 +201,7 @@ export class AudioCaptureService extends EventEmitter {
     if (this.ffmpegProcess) {
       try {
         this.ffmpegProcess.kill('SIGTERM');
-      } catch (_) {}
+      } catch (_) { }
       this.ffmpegProcess = null;
     }
     this.isCapturing = false;
@@ -171,25 +221,38 @@ export class AudioCaptureService extends EventEmitter {
 
   /**
    * Try to auto-detect a Windows loopback/stereo mix audio device.
-   * Falls back to the first available output device.
+   * STRICT: NEVER select a microphone as a system audio loopback.
    */
   private async autoDetectLoopbackDevice(): Promise<string> {
     const devices = await this.listDevices();
     console.log('[AudioCapture] Available devices:', devices.map(d => d.name));
 
-    // Priority list: Stereo Mix > What U Hear > NVIDIA > Speaker/Alto-falante
-    const priority = ['stereo mix', 'what u hear', 'nvidia', 'alto-falante', 'speaker', 'saída', 'output'];
+    // Exclude any device identified as microphone/input
+    const nonMicDevices = devices.filter(d => !AudioCaptureService.isMicrophoneDevice(d.name) && d.type !== 'input');
+
+    // Priority list for loopback candidates
+    const priority = ['stereo mix', 'mixagem estéreo', 'mixagem estereo', 'what u hear', 'what you hear'];
     for (const keyword of priority) {
-      const found = devices.find(d => d.name.toLowerCase().includes(keyword));
+      const found = nonMicDevices.find(d => d.name.toLowerCase().includes(keyword));
       if (found) {
-        console.log('[AudioCapture] Auto-selected device:', found.name);
+        console.log('[AudioCapture] Auto-selected loopback device:', found.name);
         return found.name;
       }
     }
 
-    // Last resort: first device that isn't a microphone
-    const output = devices.find(d => d.type === 'output');
-    if (output) return output.name;
+    // Secondary output candidates (speakers/headphones output stream, not mic)
+    const secondaryPriority = ['alto-falante', 'alto falante', 'speaker', 'saída', 'saida', 'output', 'headphone'];
+    for (const keyword of secondaryPriority) {
+      const found = nonMicDevices.find(d => d.name.toLowerCase().includes(keyword));
+      if (found) {
+        console.log('[AudioCapture] Selected output device:', found.name);
+        return found.name;
+      }
+    }
+
+    if (nonMicDevices.length > 0) {
+      return nonMicDevices[0].name;
+    }
 
     throw new Error('No suitable audio loopback device found on this system. Please enable "Stereo Mix" in Windows Sound settings.');
   }
