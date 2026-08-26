@@ -3,9 +3,8 @@
   "version": "1.0.0",
   "description": "Windows WASAPI Process Loopback Audio Capture with Process Exclusion (Discord)",
   "main": "index.js",
-  "os": ["win32"],
   "scripts": {
-    "build": "node-gyp rebuild",
+    "build": "node -e \"if(process.platform==='win32'){try{require('child_process').execSync('node-gyp rebuild',{stdio:'inherit'})}catch(e){}}\"",
     "clean": "node-gyp clean"
   },
   "dependencies": {
