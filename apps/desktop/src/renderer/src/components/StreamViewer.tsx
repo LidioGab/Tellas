@@ -14,6 +14,10 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({ remoteStream, stream
   const [volume, setVolume] = useState<number>(1);
   const [autoplayBlocked, setAutoplayBlocked] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [showControls, setShowControls] = useState<boolean>(false);
+  const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -111,7 +115,16 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({ remoteStream, stream
     }
   };
 
+  // Touch: tap to show/hide controls for 3s
+  const handleTap = () => {
+    if (!isTouchDevice) return;
+    setShowControls(true);
+    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
+    hideControlsTimer.current = setTimeout(() => setShowControls(false), 3000);
+  };
+
   const hasAudioTrack = remoteStream ? remoteStream.getAudioTracks().length > 0 : false;
+  const controlsVisible = !isTouchDevice || showControls;
 
   return (
     <div
@@ -121,7 +134,8 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({ remoteStream, stream
       {/* Pure Video Box (Fullscreen target in F11) */}
       <div
         ref={videoBoxRef}
-        onDoubleClick={toggleFullscreen}
+        onDoubleClick={!isTouchDevice ? toggleFullscreen : undefined}
+        onTouchEnd={isTouchDevice ? handleTap : undefined}
         className="relative flex-1 bg-black flex items-center justify-center group select-none overflow-hidden cursor-pointer"
       >
         {remoteStream ? (
@@ -133,15 +147,15 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({ remoteStream, stream
               className="w-full h-full object-contain"
             />
 
-            {/* Top-Left Streamer Name Pill (Discord Style) */}
-            <div className="absolute top-3 left-3 flex items-center gap-2 bg-[#1E1F22]/85 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 shadow-lg pointer-events-none z-20 transition-opacity duration-200">
-              <div className="w-5 h-5 rounded-full bg-[#5865F2] flex items-center justify-center text-[10px] font-bold text-white uppercase shadow-sm">
+            {/* Top-Left Streamer Name Pill */}
+            <div className="absolute top-2 left-2 sm:top-3 sm:left-3 flex items-center gap-1.5 sm:gap-2 bg-[#1E1F22]/85 backdrop-blur-md px-2 py-1 sm:px-2.5 sm:py-1 rounded-lg border border-white/10 shadow-lg pointer-events-none z-20">
+              <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-[#5865F2] flex items-center justify-center text-[9px] sm:text-[10px] font-bold text-white uppercase shadow-sm">
                 {streamerName ? streamerName.charAt(0) : 'S'}
               </div>
-              <span className="text-xs font-bold text-[#F2F3F5] truncate max-w-[160px]">
+              <span className="text-[11px] sm:text-xs font-bold text-[#F2F3F5] truncate max-w-[100px] sm:max-w-[160px]">
                 {streamerName || 'Streamer'}
               </span>
-              <span className="text-[9px] uppercase font-extrabold bg-[#DA373C] text-white px-1.5 py-0.5 rounded shadow-sm flex items-center gap-1">
+              <span className="text-[8px] sm:text-[9px] uppercase font-extrabold bg-[#DA373C] text-white px-1 sm:px-1.5 py-0.5 rounded shadow-sm flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
                 AO VIVO
               </span>
@@ -156,7 +170,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({ remoteStream, stream
                 <div className="w-12 h-12 rounded-full bg-[#5865F2]/20 border border-[#5865F2] flex items-center justify-center text-[#5865F2] animate-pulse">
                   <Volume1 className="w-6 h-6" />
                 </div>
-                <h3 className="text-sm font-bold text-[#F2F3F5]">Clique para Ativar o Áudio</h3>
+                <h3 className="text-sm font-bold text-[#F2F3F5] text-center">Clique para Ativar o Áudio</h3>
                 <p className="text-xs text-[#949BA4] max-w-xs text-center">
                   O navegador pausou a saída de som automática. Clique para ouvir!
                 </p>
@@ -182,26 +196,29 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({ remoteStream, stream
           </div>
         )}
 
-        {/* Video Control Bar Overlay */}
+        {/* Video Control Bar Overlay — always visible on mobile (tap), hover on desktop */}
         {remoteStream && (
           <div
             onClick={(e) => e.stopPropagation()}
-            className="absolute bottom-0 left-0 right-0 px-4 py-2.5 bg-gradient-to-t from-black/90 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-between z-20"
+            className={`absolute bottom-0 left-0 right-0 px-3 sm:px-4 py-2 sm:py-2.5 bg-gradient-to-t from-black/90 via-black/40 to-transparent transition-opacity duration-200 flex items-center justify-between z-20 ${
+              controlsVisible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+            }`}
           >
             {/* Left: Volume & Mute */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <button
                 onClick={toggleMute}
-                className="p-1 text-[#DBDEE1] hover:text-white rounded hover:bg-white/10 transition"
+                className="p-1.5 text-[#DBDEE1] hover:text-white rounded hover:bg-white/10 transition touch-manipulation"
                 title={isMuted ? 'Desmutar' : 'Mutar'}
               >
                 {isMuted || volume === 0 ? (
-                  <VolumeX className="w-4 h-4 text-[#DA373C]" />
+                  <VolumeX className="w-4 h-4 sm:w-4 sm:h-4 text-[#DA373C]" />
                 ) : (
-                  <Volume2 className="w-4 h-4 text-[#23A55A]" />
+                  <Volume2 className="w-4 h-4 sm:w-4 sm:h-4 text-[#23A55A]" />
                 )}
               </button>
 
+              {/* Volume slider — wider on mobile for easier touch */}
               <input
                 type="range"
                 min="0"
@@ -209,11 +226,12 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({ remoteStream, stream
                 step="0.05"
                 value={volume}
                 onChange={handleVolumeChange}
-                className="w-16 accent-[#5865F2] cursor-pointer h-1"
+                className="w-20 sm:w-20 accent-[#5865F2] cursor-pointer h-1 touch-manipulation"
+                style={{ WebkitAppearance: 'none' }}
               />
 
               <span
-                className={`text-[10px] font-semibold px-1.5 py-0.5 rounded bg-black/40 ${
+                className={`hidden sm:inline text-[10px] font-semibold px-1.5 py-0.5 rounded bg-black/40 ${
                   hasAudioTrack ? 'text-[#23A55A]' : 'text-[#949BA4]'
                 }`}
               >
@@ -221,11 +239,11 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({ remoteStream, stream
               </span>
             </div>
 
-            {/* Right: Discrete Compact Fullscreen Button */}
+            {/* Right: Fullscreen */}
             <div className="flex items-center gap-1.5">
               <button
                 onClick={toggleFullscreen}
-                className="p-1.5 text-[#DBDEE1] hover:text-white rounded hover:bg-white/15 bg-black/40 transition"
+                className="p-1.5 text-[#DBDEE1] hover:text-white rounded hover:bg-white/15 bg-black/40 transition touch-manipulation"
                 title={isFullscreen ? 'Sair da Tela Cheia (F / Esc)' : 'Tela Cheia (F / Duplo clique)'}
               >
                 {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}

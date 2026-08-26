@@ -418,48 +418,44 @@ export const App: React.FC = () => {
     <div className="flex flex-col h-screen bg-[#1E1F22] text-[#DBDEE1] select-none font-sans overflow-hidden">
 
       {/* Clean Discord-Style Header */}
-      <header className="h-12 px-4 bg-[#2B2D31] border-b border-[#1F2023] flex items-center justify-between z-30 shadow-sm">
-        {/* Left: Tellas Branding & Channel */}
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-[#111214] border border-white/10 flex items-center justify-center shadow-md">
-            <TellasLogo className="w-5 h-5" />
+      <header className="h-12 px-2 sm:px-4 bg-[#2B2D31] border-b border-[#1F2023] flex items-center justify-between z-30 shadow-sm min-w-0">
+        {/* Left: Tellas Branding */}
+        <div className="flex items-center gap-2 min-w-0 shrink-0">
+          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-[#111214] border border-white/10 flex items-center justify-center shadow-md shrink-0">
+            <TellasLogo className="w-4 h-4 sm:w-5 sm:h-5" />
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="font-extrabold text-[#F2F3F5] text-sm tracking-wider">
-              TELLAS
-            </span>
-            <span className="text-xs font-bold text-[#80848E]">/</span>
-            <span className="text-xs font-semibold text-[#949BA4]">
-              transmissão
-            </span>
+          <div className="flex items-center gap-1">
+            <span className="font-extrabold text-[#F2F3F5] text-sm tracking-wider">TELLAS</span>
+            <span className="hidden sm:inline text-xs font-bold text-[#80848E]">/</span>
+            <span className="hidden sm:inline text-xs font-semibold text-[#949BA4]">transmissão</span>
           </div>
         </div>
 
         {/* Right: User Profile & Interactive Room Controls */}
         <div className="flex items-center gap-2.5">
           {/* User Name Pill */}
-          <div className="flex items-center gap-1.5 bg-[#1E1F22] px-2.5 py-1 rounded-md border border-[#313338] text-xs">
-            <div className="w-4 h-4 rounded-full bg-[#5865F2] flex items-center justify-center text-[9px] font-bold text-white uppercase">
+          <div className="flex items-center gap-1.5 bg-[#1E1F22] px-2 py-1 rounded-md border border-[#313338] text-xs">
+            <div className="w-5 h-5 rounded-full bg-[#5865F2] flex items-center justify-center text-[9px] font-bold text-white uppercase shrink-0">
               {userName ? userName.charAt(0) : 'U'}
             </div>
-            <span className="font-semibold text-[#F2F3F5] max-w-[110px] truncate">
+            <span className="hidden sm:block font-semibold text-[#F2F3F5] max-w-[90px] truncate">
               {userName || 'Convidado'}
             </span>
-            <span className="w-1.5 h-1.5 rounded-full bg-[#23A55A]"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-[#23A55A] shrink-0"></span>
           </div>
 
           {/* Room Controls if In Room */}
           {isInRoom && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2">
               {/* Room Code Badge */}
-              <div className="flex items-center gap-1 bg-[#1E1F22] px-2.5 py-1 rounded-md border border-[#313338] text-xs">
-                <span className="text-[10px] text-[#949BA4] uppercase font-bold">Sala:</span>
-                <span className="font-mono font-bold text-[#F2F3F5] tracking-wider">
+              <div className="flex items-center gap-1 bg-[#1E1F22] px-2 py-1 rounded-md border border-[#313338] text-xs">
+                <span className="hidden sm:inline text-[10px] text-[#949BA4] uppercase font-bold">Sala:</span>
+                <span className="font-mono font-bold text-[#F2F3F5] tracking-wider text-[11px]">
                   {roomId}
                 </span>
                 <button
                   onClick={copyRoomCode}
-                  className="p-0.5 hover:text-white text-[#949BA4] transition"
+                  className="p-0.5 hover:text-white text-[#949BA4] transition touch-manipulation"
                   title="Copiar código"
                 >
                   {copied ? <Check className="w-3 h-3 text-[#23A55A]" /> : <Copy className="w-3 h-3" />}
@@ -558,10 +554,10 @@ export const App: React.FC = () => {
               {/* Leave Button */}
               <button
                 onClick={handleLeaveRoom}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#DA373C] hover:bg-[#BE2F34] text-white transition text-xs font-semibold shadow-sm"
+                className="flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-md bg-[#DA373C] hover:bg-[#BE2F34] text-white transition text-xs font-semibold shadow-sm touch-manipulation"
               >
                 <LogOut className="w-3 h-3" />
-                Sair
+                <span className="hidden sm:inline">Sair</span>
               </button>
             </div>
           )}
@@ -569,7 +565,7 @@ export const App: React.FC = () => {
       </header>
 
       {/* Main Workspace */}
-      <main className="flex-1 p-4 overflow-hidden relative bg-[#313338]">
+      <main className="flex-1 p-2 sm:p-4 overflow-y-auto overflow-x-hidden relative bg-[#313338]">
         {!isInRoom ? (
           /* Discord-Style Join / Create Room Screen */
           <div className="h-full flex items-center justify-center">
