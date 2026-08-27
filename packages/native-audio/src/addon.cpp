@@ -2,6 +2,15 @@
 #include "process_loopback.h"
 #include <memory>
 #include <iostream>
+#include <vector>
+#include <unordered_map>
+#include <string>
+#include <windows.h>
+#include <mmdeviceapi.h>
+#include <audiopolicy.h>
+#include <wrl/client.h>
+
+using Microsoft::WRL::ComPtr;
 
 class NativeAudioAddon : public Napi::ObjectWrap<NativeAudioAddon> {
 public:
@@ -18,6 +27,10 @@ public:
         env.SetInstanceData(constructor);
 
         exports.Set("ProcessLoopbackCapture", func);
+        exports.Set(
+            Napi::String::New(env, "getRenderAudioSessions"),
+            Napi::Function::New(env, NativeAudioAddon::GetRenderAudioSessions)
+        );
         return exports;
     }
 
@@ -39,6 +52,99 @@ private:
     static Napi::Value IsSupported(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         return Napi::Boolean::New(env, ProcessLoopbackCapture::IsSupported());
+    }
+
+    static Napi::Value GetRenderAudioSessions(const Napi::CallbackInfo& info) {
+        Napi::Env env = info.Env();
+        Napi::Array resultArr = Napi::Array::New(env);
+
+        HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        bool needCoUninit = SUCCEEDED(hrCo);
+
+        std::unordered_map<DWORD, std::string> sessionMap;
+
+        do {
+            ComPtr<IMMDeviceEnumerator> deviceEnumerator;
+            HRESULT hr = CoCreateInstance(
+                __uuidof(MMDeviceEnumerator),
+                nullptr,
+                CLSCTX_ALL,
+                __uuidof(IMMDeviceEnumerator),
+                (void**)&deviceEnumerator
+            );
+            if (FAILED(hr) || !deviceEnumerator) break;
+
+            ComPtr<IMMDeviceCollection> deviceCollection;
+            hr = deviceEnumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &deviceCollection);
+            if (FAILED(hr) || !deviceCollection) break;
+
+            UINT deviceCount = 0;
+            if (FAILED(deviceCollection->GetCount(&deviceCount))) break;
+
+            for (UINT i = 0; i < deviceCount; ++i) {
+                ComPtr<IMMDevice> device;
+                if (FAILED(deviceCollection->Item(i, &device)) || !device) continue;
+
+                ComPtr<IAudioSessionManager2> sessionManager;
+                if (FAILED(device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, (void**)&sessionManager)) || !sessionManager) {
+                    continue;
+                }
+
+                ComPtr<IAudioSessionEnumerator> sessionEnumerator;
+                if (FAILED(sessionManager->GetSessionEnumerator(&sessionEnumerator)) || !sessionEnumerator) {
+                    continue;
+                }
+
+                int sessionCount = 0;
+                if (FAILED(sessionEnumerator->GetCount(&sessionCount))) continue;
+
+                for (int s = 0; s < sessionCount; ++s) {
+                    ComPtr<IAudioSessionControl> sessionControl;
+                    if (FAILED(sessionEnumerator->GetSession(s, &sessionControl)) || !sessionControl) continue;
+
+                    ComPtr<IAudioSessionControl2> sessionControl2;
+                    if (FAILED(sessionControl.As(&sessionControl2)) || !sessionControl2) continue;
+
+                    DWORD pid = 0;
+                    if (FAILED(sessionControl2->GetProcessId(&pid)) || pid == 0) continue;
+
+                    AudioSessionState state = AudioSessionStateInactive;
+                    sessionControl->GetState(&state);
+
+                    std::string stateStr = "inactive";
+                    if (state == AudioSessionStateActive) {
+                        stateStr = "active";
+                    } else if (state == AudioSessionStateExpired) {
+                        stateStr = "expired";
+                    }
+
+                    auto it = sessionMap.find(pid);
+                    if (it == sessionMap.end()) {
+                        sessionMap[pid] = stateStr;
+                    } else {
+                        if (stateStr == "active") {
+                            it->second = "active";
+                        } else if (stateStr == "inactive" && it->second == "expired") {
+                            it->second = "inactive";
+                        }
+                    }
+                }
+            }
+        } while (false);
+
+        if (needCoUninit) {
+            CoUninitialize();
+        }
+
+        uint32_t idx = 0;
+        for (const auto& kv : sessionMap) {
+            Napi::Object obj = Napi::Object::New(env);
+            obj.Set("processId", Napi::Number::New(env, kv.first));
+            obj.Set("state", Napi::String::New(env, kv.second));
+            resultArr.Set(idx++, obj);
+        }
+
+        return resultArr;
     }
 
     Napi::Value IsCapturing(const Napi::CallbackInfo& info) {

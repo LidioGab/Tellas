@@ -100,9 +100,23 @@ class ProcessLoopbackCaptureWrapper {
   }
 }
 
+function getRenderAudioSessions() {
+  if (nativeBinding && typeof nativeBinding.getRenderAudioSessions === 'function') {
+    try {
+      return nativeBinding.getRenderAudioSessions();
+    } catch (err) {
+      console.error('[NativeAudio] Error querying render audio sessions:', err.message);
+      return [];
+    }
+  }
+  return [];
+}
+
 module.exports = {
   ProcessLoopbackCapture: ProcessLoopbackCaptureWrapper,
   isNativeAddonAvailable: () => nativeBinding !== null,
   getLoadError: () => loadError,
-  getResolvedPath: () => resolvedPath
+  getResolvedPath: () => resolvedPath,
+  getRenderAudioSessions
 };
+
