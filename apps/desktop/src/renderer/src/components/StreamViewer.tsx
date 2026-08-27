@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Volume2, VolumeX, Maximize, Minimize, Volume1, X } from 'lucide-react';
+import { useLayoutMode } from '../hooks/useLayoutMode';
 
 interface StreamViewerProps {
   remoteStream: MediaStream | null;
@@ -20,13 +21,17 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [volume, setVolume] = useState<number>(1);
   const [autoplayBlocked, setAutoplayBlocked] = useState<boolean>(false);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [controlsVisible, setControlsVisible] = useState<boolean>(true);
   const [isAdjustingVolume, setIsAdjustingVolume] = useState<boolean>(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isMobile = typeof window !== 'undefined' &&
-    ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+  const {
+    layoutMode,
+    isFullscreen,
+    isTouchDevice,
+    requestFullscreenWithLock,
+    exitFullscreenWithUnlock,
+  } = useLayoutMode();
 
   // ─── Auto-Hide Controls Handler ───────────────────────────────────────
   const resetHideTimer = useCallback(() => {
@@ -37,35 +42,26 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
     if (!isAdjustingVolume) {
       hideTimer.current = setTimeout(() => {
         setControlsVisible(false);
-      }, isMobile ? 3500 : 2500);
+      }, isTouchDevice ? 3500 : 2500);
     }
-  }, [isAdjustingVolume, isMobile]);
+  }, [isAdjustingVolume, isTouchDevice]);
 
   const handleMouseMove = () => {
-    if (!isMobile) {
+    if (!isTouchDevice) {
       resetHideTimer();
     }
   };
 
   const handleMouseLeave = () => {
-    if (!isMobile && !isAdjustingVolume && !autoplayBlocked) {
+    if (!isTouchDevice && !isAdjustingVolume && !autoplayBlocked) {
       if (hideTimer.current) clearTimeout(hideTimer.current);
       setControlsVisible(false);
     }
   };
 
-  // ─── Fullscreen change listener ───────────────────────────────────────
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
   // ─── Keyboard shortcut F ─────────────────────────────────────────────
   useEffect(() => {
-    if (isMobile) return;
+    if (isTouchDevice) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
         (e.key === 'f' || e.key === 'F') &&
@@ -79,7 +75,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [remoteStream, isMobile, onClose]);
+  }, [remoteStream, isTouchDevice, onClose]);
 
   // ─── Attach stream to video element ─────────────────────────────────
   useEffect(() => {
@@ -152,13 +148,13 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
     }
   };
 
-  const toggleFullscreen = (e?: React.MouseEvent | React.TouchEvent) => {
+  const toggleFullscreen = async (e?: React.MouseEvent | React.TouchEvent) => {
     if (e) e.stopPropagation();
     if (!videoBoxRef.current) return;
     if (!document.fullscreenElement) {
-      videoBoxRef.current.requestFullscreen().catch(console.error);
+      await requestFullscreenWithLock(videoBoxRef.current);
     } else {
-      document.exitFullscreen().catch(console.error);
+      await exitFullscreenWithUnlock();
     }
     resetHideTimer();
   };
@@ -190,19 +186,22 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
     ? 'opacity-100 pointer-events-auto'
     : 'opacity-0 pointer-events-none';
 
+  const isLandscapeMobile = layoutMode === 'MOBILE_LANDSCAPE';
+  const isImmersive = isFullscreen || isLandscapeMobile;
+
   return (
     <div
       ref={videoBoxRef}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
-      onDoubleClick={!isMobile ? toggleFullscreen : undefined}
-      onClick={!isMobile ? handleVideoTap : undefined}
-      onTouchEnd={isMobile ? handleVideoTap : undefined}
+      onDoubleClick={!isTouchDevice ? toggleFullscreen : undefined}
+      onClick={!isTouchDevice ? handleVideoTap : undefined}
+      onTouchEnd={isTouchDevice ? handleVideoTap : undefined}
       className={`relative w-full h-full bg-[#080A0D] flex items-center justify-center select-none overflow-hidden ${
-        isFullscreen
-          ? 'fixed inset-0 z-50 rounded-none'
+        isImmersive
+          ? 'fixed inset-0 z-50 rounded-none w-screen h-screen bg-black'
           : 'rounded-[10px] border border-[#252A34] shadow-[0_20px_50px_rgba(0,0,0,0.40)]'
-      } ${!isOverlayActive && !isMobile ? 'cursor-none' : 'cursor-default'}`}
+      } ${!isOverlayActive && !isTouchDevice ? 'cursor-none' : 'cursor-default'}`}
     >
       {remoteStream ? (
         <>
