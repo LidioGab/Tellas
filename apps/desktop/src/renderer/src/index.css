@@ -1,52 +1,55 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg-main: #0B0D10;
+  --bg-secondary: #101217;
+  --surface: #16191F;
+  --surface-hover: #1D2129;
+  --surface-selected: #202530;
+  --border: #252A34;
+  --border-hover: #323846;
+  --text-primary: #F4F6F8;
+  --text-secondary: #9DA5B4;
+  --text-tertiary: #687180;
+  --text-muted: #505764;
+  --accent: #5B7CFA;
+  --accent-hover: #6C89FF;
+  --accent-active: #4F70EB;
+  --success: #34D399;
+  --danger: #F87171;
+  --warning: #FBBF24;
+}
+
 @layer base {
   body {
-    background-color: #1E1F22;
-    color: #F2F3F5;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: #0B0D10;
+    color: #F4F6F8;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     user-select: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 
-@layer utilities {
-  .discord-panel {
-    background: #2B2D31;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-  }
-  
-  .discord-card {
-    background: #1E1F22;
-    border: 1px solid rgba(255, 255, 255, 0.04);
-  }
-
-  .discord-glass {
-    background: rgba(30, 31, 34, 0.85);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-  }
-}
-
-/* Custom Discord Style Scrollbars */
+/* Professional Subtle Scrollbars */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #2B2D31;
-  border-radius: 4px;
+  background: #101217;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1A1B1E;
-  border-radius: 4px;
+  background: #252A34;
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #111214;
+  background: #323846;
 }
