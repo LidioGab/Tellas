@@ -52,12 +52,21 @@ export class LiveKitService {
   private currentQualityPreset: string = '1080p30';
   private backendUrl: string;
   private participantStreams: Map<string, MediaStream> = new Map();
+  private sessionToken: string | null = null;
 
   constructor() {
     this.backendUrl = getBackendUrl();
   }
 
   // ─── Configuration ──────────────────────────────────────────────────
+
+  public setSessionToken(token: string | null): void {
+    this.sessionToken = token;
+  }
+
+  public getSessionToken(): string | null {
+    return this.sessionToken;
+  }
 
   public setCallbacks(callbacks: LiveKitCallbacks): void {
     this.callbacks = callbacks;
@@ -75,11 +84,20 @@ export class LiveKitService {
 
   // ─── Token Request ──────────────────────────────────────────────────
 
-  public async requestToken(request: LiveKitTokenRequest): Promise<LiveKitTokenResponse> {
-    console.log('[LiveKit] Requesting token from:', `${this.backendUrl}/api/livekit/token`, request);
+  public async requestToken(request: LiveKitTokenRequest, tokenOverride?: string): Promise<LiveKitTokenResponse> {
+    const token = tokenOverride || this.sessionToken;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    console.log('[LiveKit] Requesting protected token from:', `${this.backendUrl}/api/livekit/token`);
     const response = await fetch(`${this.backendUrl}/api/livekit/token`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(request),
     });
 
@@ -92,6 +110,7 @@ export class LiveKitService {
     console.log('[LiveKit] Token received successfully for room:', data.roomName);
     return data;
   }
+
 
   // ─── Connect to Room ────────────────────────────────────────────────
 

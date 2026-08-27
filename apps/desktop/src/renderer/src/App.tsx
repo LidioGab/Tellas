@@ -30,9 +30,12 @@ import {
 import { useLayoutMode } from './hooks/useLayoutMode';
 
 interface Member {
-  socketId: string;
+  participantId?: string;
+  socketId?: string;
   identity: string;
   isHost?: boolean;
+  canPublish?: boolean;
+  role?: 'host' | 'participant';
 }
 
 function generateRandomName(): string {
@@ -54,6 +57,9 @@ export const App: React.FC = () => {
   const [inputRoomId, setInputRoomId] = useState<string>('');
   const [isInRoom, setIsInRoom] = useState<boolean>(false);
   const [isHost, setIsHost] = useState<boolean>(false);
+  const [myParticipantId, setMyParticipantId] = useState<string>(() => {
+    return sessionStorage.getItem('tellas_participant_id') || '';
+  });
   const [members, setMembers] = useState<Member[]>([]);
   const [copied, setCopied] = useState<boolean>(false);
 
@@ -136,15 +142,39 @@ export const App: React.FC = () => {
   // ─── Socket.IO Room Events ──────────────────────────────────────────
 
   useEffect(() => {
-    socket.on('user-joined', ({ socketId, identity }: { socketId: string; identity?: string }) => {
+    socket.on('user-joined', ({ socketId, participantId, identity, isHost: joinedHost }: any) => {
+      console.log('[App] user-joined received:', { socketId, participantId, identity, joinedHost });
       setMembers((prev) => {
-        const filtered = prev.filter((m) => m.socketId !== socketId);
-        return [...filtered, { socketId, identity: identity || 'Convidado', isHost: false }];
+        const filtered = prev.filter((m) =>
+          participantId && m.participantId ? m.participantId !== participantId : m.socketId !== socketId
+        );
+        return [
+          ...filtered,
+          {
+            socketId,
+            participantId,
+            identity: identity || 'Convidado',
+            isHost: !!joinedHost,
+          },
+        ];
       });
     });
 
-    socket.on('user-left', ({ socketId }: { socketId: string }) => {
-      setMembers((prev) => prev.filter((m) => m.socketId !== socketId));
+    socket.on('user-left', ({ socketId, participantId }: any) => {
+      console.log('[App] user-left received:', { socketId, participantId });
+      setMembers((prev) =>
+        prev.filter((m) => {
+          if (participantId && m.participantId) return m.participantId !== participantId;
+          return m.socketId !== socketId;
+        })
+      );
+    });
+
+    socket.on('room-members-updated', (updatedMembers: Member[]) => {
+      console.log('[App] room-members-updated received:', updatedMembers);
+      if (Array.isArray(updatedMembers)) {
+        setMembers(updatedMembers);
+      }
     });
 
     socket.on('stream-started', ({ identity }: { identity?: string } = {}) => {
@@ -163,6 +193,7 @@ export const App: React.FC = () => {
     return () => {
       socket.off('user-joined');
       socket.off('user-left');
+      socket.off('room-members-updated');
       socket.off('stream-started');
       socket.off('stream-stopped');
     };
@@ -183,12 +214,27 @@ export const App: React.FC = () => {
 
   const handleCreateRoom = useCallback(() => {
     const identity = getEffectiveIdentity();
+    try {
+      sessionStorage.removeItem('tellas_session_token');
+      sessionStorage.removeItem('tellas_session_room');
+      sessionStorage.removeItem('tellas_participant_id');
+    } catch (_) {}
+
     socket.emit('create-room', { identity }, (res: any) => {
       if (res.success) {
+        if (res.sessionToken) {
+          livekitService.setSessionToken(res.sessionToken);
+          try {
+            sessionStorage.setItem('tellas_session_token', res.sessionToken);
+            sessionStorage.setItem('tellas_session_room', res.roomId);
+            sessionStorage.setItem('tellas_participant_id', res.participantId || '');
+          } catch (_) {}
+        }
+        setMyParticipantId(res.participantId || '');
         setRoomId(res.roomId);
         setIsInRoom(true);
         setIsHost(true);
-        setMembers(res.members || [{ socketId: socket.id, identity, isHost: true }]);
+        setMembers(res.members || [{ socketId: socket.id, participantId: res.participantId, identity, isHost: true }]);
       } else {
         alert(res.error || 'Erro ao criar sala');
       }
@@ -201,13 +247,24 @@ export const App: React.FC = () => {
 
     const cleanRoomId = inputRoomId.trim().toUpperCase();
     const identity = getEffectiveIdentity();
+    const savedRoom = sessionStorage.getItem('tellas_session_room');
+    const savedToken = (savedRoom === cleanRoomId ? sessionStorage.getItem('tellas_session_token') : null) || undefined;
 
-    socket.emit('join-room', { roomId: cleanRoomId, identity }, (res: any) => {
+    socket.emit('join-room', { roomId: cleanRoomId, identity, sessionToken: savedToken }, (res: any) => {
       if (res.success) {
+        if (res.sessionToken) {
+          livekitService.setSessionToken(res.sessionToken);
+          try {
+            sessionStorage.setItem('tellas_session_token', res.sessionToken);
+            sessionStorage.setItem('tellas_session_room', res.roomId);
+            sessionStorage.setItem('tellas_participant_id', res.participantId || '');
+          } catch (_) {}
+        }
+        setMyParticipantId(res.participantId || '');
         setRoomId(res.roomId);
         setIsInRoom(true);
         setIsHost(res.isHost);
-        setMembers(res.members || [{ socketId: socket.id, identity, isHost: res.isHost }]);
+        setMembers(res.members || [{ socketId: socket.id, participantId: res.participantId, identity, isHost: res.isHost }]);
         connectAsViewer(res.roomId, identity);
       } else {
         alert(res.error || 'Erro ao entrar na sala');
@@ -219,6 +276,13 @@ export const App: React.FC = () => {
     if (roomId) socket.emit('leave-room', { roomId });
     await handleStopStream();
     await livekitService.disconnect();
+    livekitService.setSessionToken(null);
+    try {
+      sessionStorage.removeItem('tellas_session_token');
+      sessionStorage.removeItem('tellas_session_room');
+      sessionStorage.removeItem('tellas_participant_id');
+    } catch (_) {}
+    setMyParticipantId('');
     setIsInRoom(false);
     setRoomId('');
     setMembers([]);
@@ -227,6 +291,8 @@ export const App: React.FC = () => {
     setStreamingIdentity(null);
     setWatchModalOpen(false);
   }, [roomId]);
+
+
 
   const copyRoomCode = useCallback(() => {
     navigator.clipboard.writeText(roomId);
@@ -340,6 +406,8 @@ export const App: React.FC = () => {
     setSelectedSource(null);
     if (roomId) socket.emit('stop-stream', { roomId });
   };
+
+
 
   const handleQualityChange = (presetKey: string) => {
     setQualityPreset(presetKey);
@@ -623,7 +691,7 @@ export const App: React.FC = () => {
 
                   {/* Remote Members */}
                   {members
-                    .filter((m) => m.socketId !== socket.id)
+                    .filter((m) => (myParticipantId && m.participantId ? m.participantId !== myParticipantId : m.socketId !== socket.id))
                     .map((member) => {
                       const streamItem = Array.from(remoteStreams.entries()).find(([_, s]) => s.identity === member.identity);
                       const isStreamingRemote = !!streamItem;
@@ -631,7 +699,7 @@ export const App: React.FC = () => {
 
                       return (
                         <div
-                          key={member.socketId}
+                          key={member.participantId || member.socketId}
                           onClick={() => {
                             if (streamItem) setSelectedStreamParticipantId(streamItem[0]);
                           }}
@@ -746,12 +814,12 @@ export const App: React.FC = () => {
 
                 {/* Remote Members */}
                 {members
-                  .filter((m) => m.socketId !== socket.id)
+                  .filter((m) => (myParticipantId && m.participantId ? m.participantId !== myParticipantId : m.socketId !== socket.id))
                   .map((member) => {
                     const isStreamer = Array.from(remoteStreams.values()).some((s) => s.identity === member.identity) || streamingIdentity === member.identity;
                     return (
                       <div
-                        key={member.socketId}
+                        key={member.participantId || member.socketId}
                         className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#16191F] transition"
                       >
                         <div className="relative shrink-0">
@@ -781,6 +849,8 @@ export const App: React.FC = () => {
               </div>
 
               {/* Bottom Stream Controls (always available when local user is not streaming) */}
+
+
               {!isStreaming && (
                 <div className="p-3 border-t border-[#1D2129] space-y-2">
                   <div className="flex items-center gap-1 bg-[#16191F] px-2 py-1 rounded-md border border-[#252A34]">

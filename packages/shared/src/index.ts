@@ -10,11 +10,22 @@ export interface DesktopSource {
 
 // ─── Room State (Backend) ───────────────────────────────────────────────────
 
+export interface MemberInfo {
+  participantId: string;
+  identity: string;
+  role: 'host' | 'participant';
+  canPublish: boolean;
+  isHost: boolean;
+  socketId?: string;
+}
+
 export interface RoomState {
   roomId: string;
   hostId: string;
   peers: string[];
   isStreaming: boolean;
+  members?: MemberInfo[];
+  activeStreamers?: string[];
 }
 
 // ─── LiveKit Token Request / Response ───────────────────────────────────────
@@ -22,15 +33,16 @@ export interface RoomState {
 export type ParticipantRole = 'publisher' | 'viewer';
 
 export interface LiveKitTokenRequest {
-  roomId: string;
-  identity: string;
-  role: ParticipantRole;
+  roomId?: string;
+  identity?: string;
+  role?: ParticipantRole;
 }
 
 export interface LiveKitTokenResponse {
   token: string;
   livekitUrl: string;
   roomName: string;
+  participantId?: string;
 }
 
 // ─── Video Quality Presets ──────────────────────────────────────────────────
@@ -55,29 +67,52 @@ export const VIDEO_QUALITY_PRESETS: Record<string, VideoQualityPreset> = {
 export interface SignalingEvents {
   // Client → Server
   'create-room': (
-    payload: { roomId?: string },
-    callback: (res: { success: boolean; roomId: string; error?: string }) => void
-  ) => void;
-  'join-room': (
-    payload: { roomId: string; identity: string },
+    payload: { roomId?: string; identity?: string },
     callback: (res: {
       success: boolean;
       roomId: string;
-      isHost: boolean;
-      peers: string[];
+      participantId?: string;
+      sessionToken?: string;
+      sessionRole?: 'host' | 'participant';
+      members?: MemberInfo[];
       error?: string;
+      code?: string;
     }) => void
   ) => void;
+  'join-room': (
+    payload: { roomId: string; identity?: string; sessionToken?: string },
+    callback: (res: {
+      success: boolean;
+      roomId: string;
+      participantId?: string;
+      sessionToken?: string;
+      sessionRole?: 'host' | 'participant';
+      isHost: boolean;
+      peers: string[];
+      members?: MemberInfo[];
+      error?: string;
+      code?: string;
+    }) => void
+  ) => void;
+  // Room actions (Session Token removed: authenticated via socket binding)
   'leave-room': (payload: { roomId: string }) => void;
-  'start-stream': (payload: { roomId: string }) => void;
-  'stop-stream': (payload: { roomId: string }) => void;
+  'start-stream': (
+    payload: { roomId: string; identity?: string },
+    callback?: (response: { success: boolean; error?: string }) => void
+  ) => void;
+  'stop-stream': (
+    payload: { roomId: string },
+    callback?: (response: { success: boolean; error?: string }) => void
+  ) => void;
 
   // Server → Client
-  'user-joined': (payload: { socketId: string }) => void;
-  'user-left': (payload: { socketId: string }) => void;
-  'stream-started': (payload: { streamerSocketId: string }) => void;
-  'stream-stopped': (payload: { streamerSocketId: string }) => void;
+  'user-joined': (payload: { socketId: string; identity?: string; participantId?: string; isHost?: boolean }) => void;
+  'user-left': (payload: { socketId: string; participantId?: string }) => void;
+  'room-members-updated': (members: MemberInfo[]) => void;
+  'stream-started': (payload: { streamerSocketId: string; participantId?: string; identity?: string }) => void;
+  'stream-stopped': (payload: { streamerSocketId: string; participantId?: string; identity?: string; remainingStreamersCount?: number }) => void;
 }
+
 
 // ─── Windows Audio Environment & Strategy ───────────────────────────────────
 
@@ -94,4 +129,3 @@ export interface WindowsAudioEnvironment {
   processLoopbackSupported: boolean;
   strategy: AudioCaptureStrategy;
 }
-
