@@ -473,245 +473,386 @@ export const App: React.FC = () => {
             </div>
           </div>
         ) : (
-          /* ── Room View: Sidebar + Stage ────────────────────────────── */
-          <div className="h-full flex overflow-hidden">
+          /* ── Room View (Responsive: Mobile Stack vs Desktop Split) ──── */
+          <div className="h-full flex flex-col overflow-hidden">
 
-            {/* ── Left Sidebar (Width: 240px) ─────────────────────────── */}
-            <aside className="w-60 shrink-0 bg-[#101217] border-r border-[#1D2129] flex flex-col overflow-hidden">
-              {/* Sala Header */}
-              <div className="px-4 pt-3.5 pb-2.5 border-b border-[#1D2129]">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180] mb-0.5">Sala</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-[#F4F6F8] font-mono tracking-wider">{roomId}</span>
-                  <button onClick={copyRoomCode} className="text-[#687180] hover:text-[#F4F6F8] transition" title="Copiar">
-                    {copied ? <Check className="w-3 h-3 text-[#34D399]" /> : <Copy className="w-3 h-3" />}
-                  </button>
-                </div>
-              </div>
-
-              {/* Active Streamers Cards (Multi-stream support) */}
-              {Array.from(remoteStreams.entries()).map(([participantId, item]) => (
-                <div key={participantId} className="mx-3 mt-2.5 p-2.5 rounded-lg bg-[#16191F] border border-[#252A34] shadow-subtle flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="w-2 h-2 rounded-full bg-[#F87171] shrink-0" />
-                    <div className="truncate">
-                      <p className="text-xs font-medium text-[#F4F6F8] truncate leading-tight">
-                        {item.identity}
-                      </p>
-                      <p className="text-[11px] text-[#687180]">Transmitindo</p>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      setSelectedStreamParticipantId(participantId);
-                      setWatchModalOpen(true);
-                    }}
-                    className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#5B7CFA]/12 hover:bg-[#5B7CFA]/18 border border-[#5B7CFA]/20 text-[#8FA5FF] text-[11px] font-medium transition"
-                  >
-                    <Play className="w-2.5 h-2.5 fill-current" />
-                    Assistir
-                  </button>
-                </div>
-              ))}
-
-              {/* Participants List */}
-              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180] px-1 mb-2">
-                  Participantes — {Math.max(1, members.length)}
-                </p>
-
-                {/* Self */}
-                <div className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#16191F] transition">
-                  <div className="relative shrink-0">
-                    <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-bold text-[#F4F6F8] uppercase">
-                      {userName ? userName.charAt(0) : 'U'}
-                    </div>
-                    <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#101217]" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-[#F4F6F8] truncate">
-                      {userName} <span className="text-[#687180] font-normal">(você)</span>
-                    </p>
-                    <div className="flex items-center gap-1.5">
-                      {isHost && (
-                        <span className="text-[10px] text-[#FBBF24] flex items-center gap-0.5 font-medium">
-                          <Crown className="w-2.5 h-2.5" /> Host
-                        </span>
-                      )}
-                      {isStreaming && (
-                        <span className="text-[10px] text-[#F87171] flex items-center gap-0.5 font-medium">
-                          <Radio className="w-2.5 h-2.5" /> Ao vivo
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Remote Members */}
-                {members
-                  .filter((m) => m.socketId !== socket.id)
-                  .map((member) => {
-                    const isStreamer = Array.from(remoteStreams.values()).some((s) => s.identity === member.identity) || streamingIdentity === member.identity;
-                    return (
-                      <div
-                        key={member.socketId}
-                        className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#16191F] transition"
-                      >
-                        <div className="relative shrink-0">
-                          <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-medium text-[#9DA5B4] uppercase">
-                            {member.identity ? member.identity.charAt(0) : 'C'}
-                          </div>
-                          <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#101217]" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-medium text-[#9DA5B4] truncate">{member.identity}</p>
-                          <div className="flex items-center gap-1.5">
-                            {member.isHost && (
-                              <span className="text-[10px] text-[#FBBF24] flex items-center gap-0.5 font-medium">
-                                <Crown className="w-2.5 h-2.5" /> Host
-                              </span>
-                            )}
-                            {isStreamer && (
-                              <span className="text-[10px] text-[#F87171] flex items-center gap-0.5 font-medium">
-                                <Radio className="w-2.5 h-2.5" /> Ao vivo
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-
-              {/* Bottom Stream Controls (always available when local user is not streaming) */}
-              {!isStreaming && (
-                <div className="p-3 border-t border-[#1D2129] space-y-2">
-                  <div className="flex items-center gap-1 bg-[#16191F] px-2 py-1 rounded-md border border-[#252A34]">
-                    <Settings className="w-3 h-3 text-[#687180]" />
-                    <select
-                      value={qualityPreset}
-                      onChange={(e) => handleQualityChange(e.target.value)}
-                      className="bg-transparent text-[#9DA5B4] focus:outline-none cursor-pointer text-[11px] flex-1"
-                    >
-                      {Object.entries(VIDEO_QUALITY_PRESETS).map(([key, preset]) => (
-                        <option key={key} value={key} className="bg-[#101217] text-[#F4F6F8]">
-                          {preset.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <button
-                    onClick={handleStartNativeCapture}
-                    className="w-full py-1.5 rounded-md bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium flex items-center justify-center gap-1.5 transition"
-                  >
-                    <ScreenShare className="w-3.5 h-3.5 text-[#5B7CFA]" />
-                    Seletor do Windows
-                  </button>
-
-                  <button
-                    onClick={() => setIsModalOpen(true)}
-                    className="w-full py-2 rounded-md bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white text-xs font-medium flex items-center justify-center gap-1.5 shadow-cta transition"
-                  >
-                    <Monitor className="w-3.5 h-3.5" />
-                    Transmitir Tela
-                  </button>
-                </div>
-              )}
-            </aside>
-
-            {/* ── Main Stage Area ──────────────────────────────────────── */}
-            <div className="flex-1 flex flex-col overflow-hidden bg-[#0B0D10]">
-              {/* Audio warning banner */}
-              {audioWarningMessage && (
-                <div className="mx-4 mt-3 flex items-center gap-2.5 bg-[#FBBF24]/10 border border-[#FBBF24]/20 rounded-lg px-3.5 py-2 text-xs text-[#FBBF24]">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span className="flex-1">{audioWarningMessage}</span>
-                  <button onClick={() => setAudioWarningMessage(null)} className="text-[#FBBF24]/60 hover:text-[#FBBF24]">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-
-              {/* Stage Content */}
-              <div className="flex-1 overflow-hidden p-4">
-                {isStreaming ? (
-                  /* Publisher Stream Stage */
-                  <div className="h-full">
-                    <StreamPublisher
-                      source={selectedSource}
-                      localStream={localStream}
-                      qualityPreset={currentPreset}
-                      streamerName={userName}
-                      onStopStream={handleStopStream}
-                      onChangeSource={() => setIsModalOpen(true)}
-                    />
-                  </div>
+            {/* ── Mobile Layout (< 768px): Dedicated Viewer Experience ── */}
+            <div className="md:hidden flex flex-col h-full overflow-hidden bg-[#0B0D10]">
+              {/* 16:9 Dedicated Video Area */}
+              <div className="w-full aspect-video bg-[#080A0D] border-b border-[#1D2129] relative shrink-0 overflow-hidden flex items-center justify-center">
+                {hasAnyRemoteStream && activeStreamEntry ? (
+                  <StreamViewer
+                    key={activeStreamEntry[0]}
+                    remoteStream={activeStreamEntry[1].stream}
+                    peerId={activeStreamEntry[0]}
+                    streamerName={activeStreamEntry[1].identity}
+                    roomId={roomId}
+                    memberCount={members.length}
+                  />
                 ) : (
-                  /* Clean Stage State */
-                  <div className="h-full flex flex-col items-center justify-center text-center gap-3">
-                    <div className="w-14 h-14 rounded-2xl bg-[#15181E] border border-[#252A34] flex items-center justify-center shadow-subtle">
-                      <Tv className="w-6 h-6 text-[#828A98]" />
+                  <div className="flex flex-col items-center justify-center p-4 text-center">
+                    <div className="w-10 h-10 rounded-xl bg-[#16191F] border border-[#252A34] flex items-center justify-center mb-2 shadow-subtle">
+                      <Tv className="w-5 h-5 text-[#687180]" />
                     </div>
-
-                    <div>
-                      <h3 className="text-[17px] font-semibold text-[#EDEFF3]">
-                        {hasAnyRemoteStream
-                          ? remoteStreams.size === 1
-                            ? `${Array.from(remoteStreams.values())[0]?.identity || 'Alguém'} está transmitindo`
-                            : `${remoteStreams.size} transmissões ao vivo disponíveis`
-                          : 'Nenhuma transmissão ativa'}
-                      </h3>
-                      <p className="text-xs text-[#737C8A] mt-1 max-w-[340px] leading-relaxed">
-                        {hasAnyRemoteStream
-                          ? 'Você pode assistir ou iniciar seu compartilhamento simultaneamente.'
-                          : 'Compartilhe sua tela para começar.'}
-                      </p>
-                    </div>
-
-                    <div className="flex flex-col items-center gap-2.5 mt-1">
-                      {hasAnyRemoteStream && (
-                        <div className="flex items-center gap-2 flex-wrap justify-center">
-                          {Array.from(remoteStreams.entries()).map(([participantId, item]) => (
-                            <button
-                              key={participantId}
-                              onClick={() => {
-                                setSelectedStreamParticipantId(participantId);
-                                setWatchModalOpen(true);
-                              }}
-                              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white font-medium text-xs shadow-cta transition transform hover:-translate-y-0.5"
-                            >
-                              <Play className="w-3.5 h-3.5 fill-white" />
-                              Assistir {item.identity}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleStartNativeCapture}
-                          className="px-3.5 py-1.5 rounded-md bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium flex items-center gap-1.5 transition"
-                        >
-                          <ScreenShare className="w-3.5 h-3.5 text-[#5B7CFA]" />
-                          Seletor do Windows
-                        </button>
-                        <button
-                          onClick={() => setIsModalOpen(true)}
-                          className={`px-4 py-1.5 rounded-md font-medium text-xs flex items-center gap-1.5 transition ${
-                            hasAnyRemoteStream
-                              ? 'bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] hover:border-[#5B7CFA] text-[#F4F6F8]'
-                              : 'bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white shadow-cta'
-                          }`}
-                        >
-                          <Monitor className="w-3.5 h-3.5" />
-                          {hasAnyRemoteStream ? 'Transmitir também' : 'Transmitir Tela'}
-                        </button>
-                      </div>
-                    </div>
+                    <p className="text-xs font-semibold text-[#EDEFF3]">Aguardando transmissão</p>
+                    <p className="text-[11px] text-[#687180] mt-0.5 max-w-[240px]">
+                      A transmissão aparecerá automaticamente aqui assim que o streamer iniciar.
+                    </p>
                   </div>
                 )}
+              </div>
+
+              {/* Multi-Streamer Switcher Bar (when 2 or more people are streaming) */}
+              {remoteStreams.size > 1 && (
+                <div className="px-3 py-2 bg-[#101217] border-b border-[#1D2129] flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#687180] shrink-0">Ao vivo:</span>
+                  {Array.from(remoteStreams.entries()).map(([pid, item]) => {
+                    const isSelected = activeStreamEntry?.[0] === pid;
+                    return (
+                      <button
+                        key={pid}
+                        onClick={() => setSelectedStreamParticipantId(pid)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium shrink-0 transition ${
+                          isSelected
+                            ? 'bg-[#5B7CFA] text-white shadow-cta'
+                            : 'bg-[#16191F] border border-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8]'
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-[#F87171]'}`} />
+                        {item.identity}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Mobile Scrollable Details */}
+              <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+                {/* Room Code Card */}
+                <div className="p-3 rounded-lg bg-[#16191F] border border-[#252A34] flex items-center justify-between shadow-subtle">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180]">Sala</p>
+                    <p className="text-xs font-mono font-bold text-[#F4F6F8] tracking-wider mt-0.5">{roomId}</p>
+                  </div>
+                  <button
+                    onClick={copyRoomCode}
+                    className="px-2.5 py-1.5 rounded-md bg-[#1D2129] hover:bg-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium flex items-center gap-1.5 transition"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5 text-[#34D399]" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copied ? 'Copiado!' : 'Copiar código'}
+                  </button>
+                </div>
+
+                {/* Participants Section */}
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180] px-1">
+                    Participantes — {Math.max(1, members.length)}
+                  </p>
+                  <div className="rounded-lg bg-[#16191F] border border-[#252A34] divide-y divide-[#1D2129] overflow-hidden">
+                    {/* Self */}
+                    <div className="flex items-center gap-2.5 px-3 py-2.5">
+                      <div className="relative shrink-0">
+                        <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-bold text-[#F4F6F8] uppercase">
+                          {userName ? userName.charAt(0) : 'U'}
+                        </div>
+                        <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#16191F]" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-[#F4F6F8] truncate">
+                          {userName} <span className="text-[#687180] font-normal">(você)</span>
+                        </p>
+                        <span className="text-[10px] text-[#687180]">Espectador</span>
+                      </div>
+                    </div>
+
+                    {/* Remote Members */}
+                    {members
+                      .filter((m) => m.socketId !== socket.id)
+                      .map((member) => {
+                        const streamItem = Array.from(remoteStreams.entries()).find(([_, s]) => s.identity === member.identity);
+                        const isStreamingRemote = !!streamItem;
+                        const isCurrentlyWatching = streamItem && activeStreamEntry?.[0] === streamItem[0];
+
+                        return (
+                          <div
+                            key={member.socketId}
+                            onClick={() => {
+                              if (streamItem) setSelectedStreamParticipantId(streamItem[0]);
+                            }}
+                            className={`flex items-center gap-2.5 px-3 py-2.5 transition ${
+                              streamItem ? 'cursor-pointer hover:bg-[#1D2129]' : ''
+                            }`}
+                          >
+                            <div className="relative shrink-0">
+                              <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-medium text-[#9DA5B4] uppercase">
+                                {member.identity ? member.identity.charAt(0) : 'C'}
+                              </div>
+                              <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#16191F]" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-medium text-[#9DA5B4] truncate">{member.identity}</p>
+                              <div className="flex items-center gap-1.5">
+                                {member.isHost && (
+                                  <span className="text-[10px] text-[#FBBF24] flex items-center gap-0.5 font-medium">
+                                    <Crown className="w-2.5 h-2.5" /> Host
+                                  </span>
+                                )}
+                                {isStreamingRemote ? (
+                                  <span className={`text-[10px] flex items-center gap-0.5 font-medium ${isCurrentlyWatching ? 'text-[#34D399]' : 'text-[#F87171]'}`}>
+                                    <Radio className="w-2.5 h-2.5" /> {isCurrentlyWatching ? 'Assistindo agora' : 'Ao vivo (toque para ver)'}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] text-[#687180]">Espectador</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Desktop Layout (>= 768px): Sidebar + Stage ───────────── */}
+            <div className="hidden md:flex flex-1 overflow-hidden">
+              {/* ── Left Sidebar (Width: 240px) ─────────────────────────── */}
+              <aside className="w-60 shrink-0 bg-[#101217] border-r border-[#1D2129] flex flex-col overflow-hidden">
+                {/* Sala Header */}
+                <div className="px-4 pt-3.5 pb-2.5 border-b border-[#1D2129]">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180] mb-0.5">Sala</p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-[#F4F6F8] font-mono tracking-wider">{roomId}</span>
+                    <button onClick={copyRoomCode} className="text-[#687180] hover:text-[#F4F6F8] transition" title="Copiar">
+                      {copied ? <Check className="w-3 h-3 text-[#34D399]" /> : <Copy className="w-3 h-3" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Active Streamers Cards (Multi-stream support) */}
+                {Array.from(remoteStreams.entries()).map(([participantId, item]) => (
+                  <div key={participantId} className="mx-3 mt-2.5 p-2.5 rounded-lg bg-[#16191F] border border-[#252A34] shadow-subtle flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2 h-2 rounded-full bg-[#F87171] shrink-0" />
+                      <div className="truncate">
+                        <p className="text-xs font-medium text-[#F4F6F8] truncate leading-tight">
+                          {item.identity}
+                        </p>
+                        <p className="text-[11px] text-[#687180]">Transmitindo</p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        setSelectedStreamParticipantId(participantId);
+                        setWatchModalOpen(true);
+                      }}
+                      className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#5B7CFA]/12 hover:bg-[#5B7CFA]/18 border border-[#5B7CFA]/20 text-[#8FA5FF] text-[11px] font-medium transition"
+                    >
+                      <Play className="w-2.5 h-2.5 fill-current" />
+                      Assistir
+                    </button>
+                  </div>
+                ))}
+
+                {/* Participants List */}
+                <div className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180] px-1 mb-2">
+                    Participantes — {Math.max(1, members.length)}
+                  </p>
+
+                  {/* Self */}
+                  <div className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#16191F] transition">
+                    <div className="relative shrink-0">
+                      <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-bold text-[#F4F6F8] uppercase">
+                        {userName ? userName.charAt(0) : 'U'}
+                      </div>
+                      <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#101217]" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-[#F4F6F8] truncate">
+                        {userName} <span className="text-[#687180] font-normal">(você)</span>
+                      </p>
+                      <div className="flex items-center gap-1.5">
+                        {isHost && (
+                          <span className="text-[10px] text-[#FBBF24] flex items-center gap-0.5 font-medium">
+                            <Crown className="w-2.5 h-2.5" /> Host
+                          </span>
+                        )}
+                        {isStreaming && (
+                          <span className="text-[10px] text-[#F87171] flex items-center gap-0.5 font-medium">
+                            <Radio className="w-2.5 h-2.5" /> Ao vivo
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Remote Members */}
+                  {members
+                    .filter((m) => m.socketId !== socket.id)
+                    .map((member) => {
+                      const isStreamer = Array.from(remoteStreams.values()).some((s) => s.identity === member.identity) || streamingIdentity === member.identity;
+                      return (
+                        <div
+                          key={member.socketId}
+                          className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#16191F] transition"
+                        >
+                          <div className="relative shrink-0">
+                            <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-medium text-[#9DA5B4] uppercase">
+                              {member.identity ? member.identity.charAt(0) : 'C'}
+                            </div>
+                            <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#101217]" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-medium text-[#9DA5B4] truncate">{member.identity}</p>
+                            <div className="flex items-center gap-1.5">
+                              {member.isHost && (
+                                <span className="text-[10px] text-[#FBBF24] flex items-center gap-0.5 font-medium">
+                                  <Crown className="w-2.5 h-2.5" /> Host
+                                </span>
+                              )}
+                              {isStreamer && (
+                                <span className="text-[10px] text-[#F87171] flex items-center gap-0.5 font-medium">
+                                  <Radio className="w-2.5 h-2.5" /> Ao vivo
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+
+                {/* Bottom Stream Controls (always available when local user is not streaming) */}
+                {!isStreaming && (
+                  <div className="p-3 border-t border-[#1D2129] space-y-2">
+                    <div className="flex items-center gap-1 bg-[#16191F] px-2 py-1 rounded-md border border-[#252A34]">
+                      <Settings className="w-3 h-3 text-[#687180]" />
+                      <select
+                        value={qualityPreset}
+                        onChange={(e) => handleQualityChange(e.target.value)}
+                        className="bg-transparent text-[#9DA5B4] focus:outline-none cursor-pointer text-[11px] flex-1"
+                      >
+                        {Object.entries(VIDEO_QUALITY_PRESETS).map(([key, preset]) => (
+                          <option key={key} value={key} className="bg-[#101217] text-[#F4F6F8]">
+                            {preset.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <button
+                      onClick={handleStartNativeCapture}
+                      className="w-full py-1.5 rounded-md bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium flex items-center justify-center gap-1.5 transition"
+                    >
+                      <ScreenShare className="w-3.5 h-3.5 text-[#5B7CFA]" />
+                      Seletor do Windows
+                    </button>
+
+                    <button
+                      onClick={() => setIsModalOpen(true)}
+                      className="w-full py-2 rounded-md bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white text-xs font-medium flex items-center justify-center gap-1.5 shadow-cta transition"
+                    >
+                      <Monitor className="w-3.5 h-3.5" />
+                      Transmitir Tela
+                    </button>
+                  </div>
+                )}
+              </aside>
+
+              {/* ── Main Stage Area ──────────────────────────────────────── */}
+              <div className="flex-1 flex flex-col overflow-hidden bg-[#0B0D10]">
+                {/* Audio warning banner */}
+                {audioWarningMessage && (
+                  <div className="mx-4 mt-3 flex items-center gap-2.5 bg-[#FBBF24]/10 border border-[#FBBF24]/20 rounded-lg px-3.5 py-2 text-xs text-[#FBBF24]">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span className="flex-1">{audioWarningMessage}</span>
+                    <button onClick={() => setAudioWarningMessage(null)} className="text-[#FBBF24]/60 hover:text-[#FBBF24]">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Stage Content */}
+                <div className="flex-1 overflow-hidden p-4">
+                  {isStreaming ? (
+                    /* Publisher Stream Stage */
+                    <div className="h-full">
+                      <StreamPublisher
+                        source={selectedSource}
+                        localStream={localStream}
+                        qualityPreset={currentPreset}
+                        streamerName={userName}
+                        onStopStream={handleStopStream}
+                        onChangeSource={() => setIsModalOpen(true)}
+                      />
+                    </div>
+                  ) : (
+                    /* Clean Stage State */
+                    <div className="h-full flex flex-col items-center justify-center text-center gap-3">
+                      <div className="w-14 h-14 rounded-2xl bg-[#15181E] border border-[#252A34] flex items-center justify-center shadow-subtle">
+                        <Tv className="w-6 h-6 text-[#828A98]" />
+                      </div>
+
+                      <div>
+                        <h3 className="text-[17px] font-semibold text-[#EDEFF3]">
+                          {hasAnyRemoteStream
+                            ? remoteStreams.size === 1
+                              ? `${Array.from(remoteStreams.values())[0]?.identity || 'Alguém'} está transmitindo`
+                              : `${remoteStreams.size} transmissões ao vivo disponíveis`
+                            : 'Nenhuma transmissão ativa'}
+                        </h3>
+                        <p className="text-xs text-[#737C8A] mt-1 max-w-[340px] leading-relaxed">
+                          {hasAnyRemoteStream
+                            ? 'Você pode assistir ou iniciar seu compartilhamento simultaneamente.'
+                            : 'Compartilhe sua tela para começar.'}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-col items-center gap-2.5 mt-1">
+                        {hasAnyRemoteStream && (
+                          <div className="flex items-center gap-2 flex-wrap justify-center">
+                            {Array.from(remoteStreams.entries()).map(([participantId, item]) => (
+                              <button
+                                key={participantId}
+                                onClick={() => {
+                                  setSelectedStreamParticipantId(participantId);
+                                  setWatchModalOpen(true);
+                                }}
+                                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white font-medium text-xs shadow-cta transition transform hover:-translate-y-0.5"
+                              >
+                                <Play className="w-3.5 h-3.5 fill-white" />
+                                Assistir {item.identity}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleStartNativeCapture}
+                            className="px-3.5 py-1.5 rounded-md bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium flex items-center gap-1.5 transition"
+                          >
+                            <ScreenShare className="w-3.5 h-3.5 text-[#5B7CFA]" />
+                            Seletor do Windows
+                          </button>
+                          <button
+                            onClick={() => setIsModalOpen(true)}
+                            className={`px-4 py-1.5 rounded-md font-medium text-xs flex items-center gap-1.5 transition ${
+                              hasAnyRemoteStream
+                                ? 'bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] hover:border-[#5B7CFA] text-[#F4F6F8]'
+                                : 'bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white shadow-cta'
+                            }`}
+                          >
+                            <Monitor className="w-3.5 h-3.5" />
+                            {hasAnyRemoteStream ? 'Transmitir também' : 'Transmitir Tela'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
