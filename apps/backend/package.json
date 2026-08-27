@@ -13,9 +13,11 @@
     "@stream-app/shared": "*",
     "dotenv": "^17.4.2",
     "fastify": "^4.26.2",
+    "jose": "^5.2.3",
     "livekit-server-sdk": "^2.18.0",
     "socket.io": "^4.7.5"
   },
+
   "devDependencies": {
     "@types/node": "^20.11.24",
     "tsx": "^4.7.1",
