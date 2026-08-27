@@ -6,8 +6,11 @@ function getBackendUrl(): string {
   if (typeof window !== 'undefined' && window.location && window.location.origin && !window.location.origin.startsWith('file://')) {
     return window.location.origin;
   }
-  return 'http://localhost:3001';
+  return 'https://tellas.fly.dev';
 }
+
+
+
 
 const BACKEND_URL: string = getBackendUrl();
 

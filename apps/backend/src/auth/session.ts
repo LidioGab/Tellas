@@ -12,10 +12,10 @@ if (!sessionSecretString) {
       '[Security] FATAL: TELLAS_SESSION_SECRET environment variable is missing in production! Startup aborted.'
     );
   } else {
-    // Generate a secure ephemeral secret for local development
-    sessionSecretString = crypto.randomBytes(32).toString('hex');
-    console.warn(
-      '[Security] WARNING: TELLAS_SESSION_SECRET not set. Using ephemeral in-memory secret for development.'
+    // Use stable secret in development to persist across dev restarts
+    sessionSecretString = 'tellas-dev-secret-stable-key-at-least-32-chars-12345';
+    console.log(
+      '[Security] INFO: TELLAS_SESSION_SECRET not set in env. Using default development secret.'
     );
   }
 } else if (isProduction && sessionSecretString.length < 32) {

@@ -41,6 +41,7 @@ export interface ExtendedRoomState {
   members: Map<string, BackendMemberInfo>; // participantId -> BackendMemberInfo
   socketToParticipant: Map<string, string>; // socketId -> participantId
   activeStreamers: Set<string>; // Set of participantIds currently streaming
+  isLocked: boolean;
   createdAt: number;
 }
 
@@ -92,7 +93,7 @@ export function getRoom(roomId: string): ExtendedRoomState | undefined {
 /**
  * Returns read-only public room state.
  */
-export function getPublicRoomState(roomId: string): RoomState | undefined {
+export function getPublicRoomState(roomId: string): (RoomState & { isLocked?: boolean }) | undefined {
   const room = getRoom(roomId);
   if (!room) return undefined;
 
@@ -113,8 +114,10 @@ export function getPublicRoomState(roomId: string): RoomState | undefined {
     isStreaming: room.activeStreamers.size > 0,
     members,
     activeStreamers: Array.from(room.activeStreamers),
+    isLocked: room.isLocked,
   };
 }
+
 
 
 /**
@@ -203,6 +206,7 @@ export function setupSignaling(io: SocketIOServer) {
         members,
         socketToParticipant,
         activeStreamers: new Set<string>(),
+        isLocked: false,
         createdAt: Date.now(),
       };
 
@@ -218,6 +222,7 @@ export function setupSignaling(io: SocketIOServer) {
           participantId,
           sessionToken,
           sessionRole: 'host',
+          isLocked: false,
           members: [
             {
               participantId,
@@ -327,6 +332,8 @@ export function setupSignaling(io: SocketIOServer) {
               `[Room] Reconnected participant ${existingMember.participantId} (${existingMember.identity}) in room ${cleanRoomId}`
             );
 
+            const isHostActual = existingMember.role === 'host' && existingMember.participantId === room.hostParticipantId;
+
             const memberList: MemberInfo[] = Array.from(room.members.values()).map((m) => ({
               participantId: m.participantId,
               identity: m.identity,
@@ -341,7 +348,7 @@ export function setupSignaling(io: SocketIOServer) {
               socketId: socket.id,
               participantId: existingMember.participantId,
               identity: existingMember.identity,
-              isHost: existingMember.role === 'host' && existingMember.participantId === room.hostParticipantId,
+              isHost: isHostActual,
             });
             socket.to(cleanRoomId).emit('room-members-updated', memberList);
 
@@ -354,7 +361,8 @@ export function setupSignaling(io: SocketIOServer) {
                 participantId: existingMember.participantId,
                 sessionToken: payload.sessionToken,
                 sessionRole: existingMember.role,
-                isHost: existingMember.role === 'host' && existingMember.participantId === room.hostParticipantId,
+                isHost: isHostActual,
+                isLocked: room.isLocked,
                 peers: otherPeers,
                 members: memberList,
               });
@@ -364,6 +372,21 @@ export function setupSignaling(io: SocketIOServer) {
         }
 
         // Case B: New participant joining
+        // Lock check: if room is locked, new participants cannot join
+        if (room.isLocked) {
+          if (typeof callback === 'function') {
+            callback({
+              success: false,
+              roomId: cleanRoomId,
+              isHost: false,
+              peers: [],
+              error: 'A sala está trancada pelo host.',
+              code: 'ROOM_LOCKED',
+            });
+          }
+          return;
+        }
+
         // Quota check: max participants per room
         if (room.members.size >= MAX_PARTICIPANTS_PER_ROOM) {
           if (typeof callback === 'function') {
@@ -434,10 +457,12 @@ export function setupSignaling(io: SocketIOServer) {
             sessionToken,
             sessionRole: 'participant',
             isHost: false,
+            isLocked: room.isLocked,
             peers: otherPeers,
             members: memberList,
           });
         }
+
 
       }
     );
@@ -562,14 +587,263 @@ export function setupSignaling(io: SocketIOServer) {
       }
     );
 
-    // ─── 5. Explicit Leave Room (Immediate Cleanup) ──────────────────
+    // ─── 5. Host Administrative: Lock / Unlock Room ──────────────────
+    socket.on(
+      'set-room-locked',
+      async (payload: { roomId: string; locked: boolean }, callback) => {
+        if (!payload || !payload.roomId || typeof payload.locked !== 'boolean') {
+          if (typeof callback === 'function') callback({ success: false, error: 'Payload inválido' });
+          return;
+        }
+        const cleanRoomId = payload.roomId.trim().toUpperCase();
+        const room = rooms.get(cleanRoomId);
+        if (!room) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Sala não encontrada' });
+          return;
+        }
+        const participantId = room.socketToParticipant.get(socket.id);
+        if (!participantId || participantId !== room.hostParticipantId) {
+          console.warn(`[Security] Unauthorized set-room-locked attempt from socket ${socket.id} on room ${cleanRoomId}`);
+          if (typeof callback === 'function') callback({ success: false, error: 'Apenas o host pode trancar ou destrancar a sala' });
+          return;
+        }
+
+        room.isLocked = payload.locked;
+        console.log(`[Room] Host ${participantId} set room ${cleanRoomId} isLocked=${room.isLocked}`);
+
+        socket.to(cleanRoomId).emit('room-lock-status-changed', {
+          roomId: cleanRoomId,
+          isLocked: room.isLocked,
+        });
+
+        if (typeof callback === 'function') {
+          callback({ success: true, isLocked: room.isLocked });
+        }
+      }
+    );
+
+    // ─── 6. Host Administrative: Kick Participant ────────────────────
+    socket.on(
+      'kick-participant',
+      async (payload: { roomId: string; targetParticipantId?: string; targetSocketId?: string }, callback) => {
+        if (!payload || !payload.roomId || (!payload.targetParticipantId && !payload.targetSocketId)) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Payload inválido' });
+          return;
+        }
+        const cleanRoomId = payload.roomId.trim().toUpperCase();
+        const room = rooms.get(cleanRoomId);
+        if (!room) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Sala não encontrada' });
+          return;
+        }
+        const senderParticipantId = room.socketToParticipant.get(socket.id);
+        if (!senderParticipantId || senderParticipantId !== room.hostParticipantId) {
+          console.warn(`[Security] Unauthorized kick-participant attempt from socket ${socket.id} on room ${cleanRoomId}`);
+          if (typeof callback === 'function') callback({ success: false, error: 'Apenas o host pode expulsar participantes' });
+          return;
+        }
+
+        let targetParticipantId = (payload.targetParticipantId || '').trim();
+        let targetMember = room.members.get(targetParticipantId);
+        if (!targetMember && payload.targetSocketId) {
+          const resolvedPId = room.socketToParticipant.get(payload.targetSocketId);
+          if (resolvedPId) {
+            targetParticipantId = resolvedPId;
+            targetMember = room.members.get(targetParticipantId);
+          }
+        }
+
+        if (targetParticipantId === room.hostParticipantId) {
+          if (typeof callback === 'function') callback({ success: false, error: 'O host não pode expulsar a si mesmo' });
+          return;
+        }
+
+        if (!targetMember) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Participante não encontrado na sala' });
+          return;
+        }
+
+        // 1. If target is streaming, remove from activeStreamers and emit stream-stopped
+        if (room.activeStreamers.has(targetParticipantId)) {
+          room.activeStreamers.delete(targetParticipantId);
+          socket.to(cleanRoomId).emit('stream-stopped', {
+            streamerSocketId: targetMember.currentSocketId || '',
+            participantId: targetParticipantId,
+            identity: targetMember.identity,
+            remainingStreamersCount: room.activeStreamers.size,
+          });
+        }
+
+        // 2. Target socket cleanup & notification
+        const targetSocketId = targetMember.currentSocketId;
+        if (targetSocketId) {
+          room.socketToParticipant.delete(targetSocketId);
+          io.to(targetSocketId).emit('kicked-from-room', {
+            roomId: cleanRoomId,
+            reason: 'Você foi expulso da sala pelo host.',
+          });
+          const targetSocket = io?.sockets?.sockets?.get ? io.sockets.sockets.get(targetSocketId) : null;
+          if (targetSocket) {
+            targetSocket.leave(cleanRoomId);
+          }
+        }
+
+
+        // 3. Clear disconnect timer if any
+        if (targetMember.disconnectTimer) {
+          clearTimeout(targetMember.disconnectTimer);
+          targetMember.disconnectTimer = null;
+        }
+
+        // 4. Remove membership completely
+        room.members.delete(targetParticipantId);
+
+        console.log(`[Room] Host ${senderParticipantId} kicked participant ${targetParticipantId} (${targetMember.identity}) from ${cleanRoomId}`);
+
+        // 5. Notify remaining room members
+        socket.to(cleanRoomId).emit('user-left', {
+          socketId: targetSocketId || '',
+          participantId: targetParticipantId,
+        });
+
+        const remainingMembers: MemberInfo[] = Array.from(room.members.values()).map((m) => ({
+          participantId: m.participantId,
+          identity: m.identity,
+          role: m.role,
+          canPublish: m.canPublish,
+          isHost: m.role === 'host' && m.participantId === room.hostParticipantId,
+          socketId: m.currentSocketId || undefined,
+        }));
+        socket.to(cleanRoomId).emit('room-members-updated', remainingMembers);
+        socket.emit('room-members-updated', remainingMembers);
+
+        if (typeof callback === 'function') {
+          callback({ success: true, members: remainingMembers });
+        }
+      }
+    );
+
+
+    // ─── 7. Host Administrative: Transfer Host ───────────────────────
+    socket.on(
+      'transfer-host',
+      async (payload: { roomId: string; targetParticipantId?: string; targetSocketId?: string }, callback) => {
+        if (!payload || !payload.roomId || (!payload.targetParticipantId && !payload.targetSocketId)) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Payload inválido' });
+          return;
+        }
+        const cleanRoomId = payload.roomId.trim().toUpperCase();
+        const room = rooms.get(cleanRoomId);
+        if (!room) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Sala não encontrada' });
+          return;
+        }
+        const senderParticipantId = room.socketToParticipant.get(socket.id);
+        if (!senderParticipantId || senderParticipantId !== room.hostParticipantId) {
+          console.warn(`[Security] Unauthorized transfer-host attempt from socket ${socket.id} on room ${cleanRoomId}`);
+          if (typeof callback === 'function') callback({ success: false, error: 'Apenas o host atual pode transferir a sala' });
+          return;
+        }
+
+        let targetParticipantId = (payload.targetParticipantId || '').trim();
+        let targetMember = room.members.get(targetParticipantId);
+        if (!targetMember && payload.targetSocketId) {
+          const resolvedPId = room.socketToParticipant.get(payload.targetSocketId);
+          if (resolvedPId) {
+            targetParticipantId = resolvedPId;
+            targetMember = room.members.get(targetParticipantId);
+          }
+        }
+
+        if (targetParticipantId === senderParticipantId) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Você já é o host da sala' });
+          return;
+        }
+
+        if (!targetMember) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Participante alvo não encontrado na sala' });
+          return;
+        }
+
+
+        const oldHostMember = room.members.get(senderParticipantId);
+        if (oldHostMember) {
+          oldHostMember.role = 'participant';
+        }
+        targetMember.role = 'host';
+        room.hostParticipantId = targetParticipantId;
+
+        console.log(`[Room] Host transferred in ${cleanRoomId}: ${senderParticipantId} -> ${targetParticipantId}`);
+
+        // Issue fresh session tokens for both
+        const oldHostToken = await createSessionToken({
+          roomId: cleanRoomId,
+          participantId: senderParticipantId,
+          sessionRole: 'participant',
+          canPublish: true,
+        });
+
+        const newHostToken = await createSessionToken({
+          roomId: cleanRoomId,
+          participantId: targetParticipantId,
+          sessionRole: 'host',
+          canPublish: true,
+        });
+
+        // Notify old host socket
+        socket.emit('role-updated', {
+          roomId: cleanRoomId,
+          role: 'participant',
+          isHost: false,
+          sessionToken: oldHostToken,
+        });
+
+        // Notify new host socket
+        if (targetMember.currentSocketId) {
+          io.to(targetMember.currentSocketId).emit('role-updated', {
+            roomId: cleanRoomId,
+            role: 'host',
+            isHost: true,
+            sessionToken: newHostToken,
+          });
+        }
+
+
+        // Broadcast host-transferred and updated memberList to all
+        socket.to(cleanRoomId).emit('host-transferred', {
+          roomId: cleanRoomId,
+          previousHostParticipantId: senderParticipantId,
+          newHostParticipantId: targetParticipantId,
+        });
+
+        const updatedMemberList: MemberInfo[] = Array.from(room.members.values()).map((m) => ({
+          participantId: m.participantId,
+          identity: m.identity,
+          role: m.role,
+          canPublish: m.canPublish,
+          isHost: m.role === 'host' && m.participantId === room.hostParticipantId,
+          socketId: m.currentSocketId || undefined,
+        }));
+        socket.to(cleanRoomId).emit('room-members-updated', updatedMemberList);
+        socket.emit('room-members-updated', updatedMemberList);
+
+        if (typeof callback === 'function') {
+          callback({ success: true, newHostParticipantId: targetParticipantId, members: updatedMemberList });
+        }
+      }
+    );
+
+
+    // ─── 8. Explicit Leave Room (Immediate Cleanup) ──────────────────
+
     socket.on('leave-room', ({ roomId }: { roomId: string }) => {
       if (roomId) {
         handleExplicitLeave(socket, roomId.trim().toUpperCase());
       }
     });
 
-    // ─── 6. Involuntary Transport Disconnect (Grace Period) ──────────
+    // ─── 9. Involuntary Transport Disconnect (Grace Period) ──────────
+
     socket.on('disconnect', () => {
       console.log(`[Socket] Disconnected: ${socket.id}`);
       rooms.forEach((_room, roomId) => {

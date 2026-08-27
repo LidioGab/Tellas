@@ -24,7 +24,10 @@ import {
   X,
   AlertTriangle,
   Play,
-  Radio
+  Radio,
+  Lock,
+  Unlock,
+  UserX
 } from 'lucide-react';
 
 import { useLayoutMode } from './hooks/useLayoutMode';
@@ -49,6 +52,13 @@ interface RemoteStreamItem {
   identity: string;
 }
 
+interface ActionModalState {
+  type: 'kick' | 'transfer';
+  targetParticipantId?: string;
+  targetSocketId?: string;
+  targetName: string;
+}
+
 export const App: React.FC = () => {
   const [userName, setUserName] = useState<string>(() => {
     return localStorage.getItem('stream_username') || generateRandomName();
@@ -57,11 +67,15 @@ export const App: React.FC = () => {
   const [inputRoomId, setInputRoomId] = useState<string>('');
   const [isInRoom, setIsInRoom] = useState<boolean>(false);
   const [isHost, setIsHost] = useState<boolean>(false);
+  const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
+  const [actionModal, setActionModal] = useState<ActionModalState | null>(null);
   const [myParticipantId, setMyParticipantId] = useState<string>(() => {
     return sessionStorage.getItem('tellas_participant_id') || '';
   });
   const [members, setMembers] = useState<Member[]>([]);
   const [copied, setCopied] = useState<boolean>(false);
+
+
 
   // Audio environment & strategy
   const [audioEnv, setAudioEnv] = useState<WindowsAudioEnvironment | null>(null);
@@ -174,6 +188,12 @@ export const App: React.FC = () => {
       console.log('[App] room-members-updated received:', updatedMembers);
       if (Array.isArray(updatedMembers)) {
         setMembers(updatedMembers);
+        const me = updatedMembers.find((m) =>
+          myParticipantId && m.participantId ? m.participantId === myParticipantId : m.socketId === socket.id
+        );
+        if (me && typeof me.isHost === 'boolean') {
+          setIsHost(me.isHost);
+        }
       }
     });
 
@@ -190,14 +210,49 @@ export const App: React.FC = () => {
       setWatchModalOpen(false);
     });
 
+    // ─── Host Administrative Events ──────────────────────────────────
+    socket.on('kicked-from-room', ({ reason }: { reason?: string } = {}) => {
+      alert(reason || 'Você foi expulso da sala pelo host.');
+      handleLeaveRoom();
+    });
+
+    socket.on('room-lock-status-changed', ({ isLocked }: { isLocked: boolean }) => {
+      setIsRoomLocked(isLocked);
+    });
+
+    socket.on('role-updated', ({ role, isHost: newIsHost, sessionToken }: any) => {
+      console.log('[App] role-updated received:', { role, newIsHost });
+      if (typeof newIsHost === 'boolean') {
+        setIsHost(newIsHost);
+      }
+      if (sessionToken) {
+        livekitService.setSessionToken(sessionToken);
+        try {
+          sessionStorage.setItem('tellas_session_token', sessionToken);
+        } catch (_) {}
+      }
+    });
+
+    socket.on('host-transferred', ({ newHostParticipantId }: any) => {
+      console.log('[App] host-transferred received:', newHostParticipantId);
+      if (myParticipantId && newHostParticipantId === myParticipantId) {
+        setIsHost(true);
+      }
+    });
+
+
     return () => {
       socket.off('user-joined');
       socket.off('user-left');
       socket.off('room-members-updated');
       socket.off('stream-started');
       socket.off('stream-stopped');
+      socket.off('kicked-from-room');
+      socket.off('room-lock-status-changed');
+      socket.off('role-updated');
+      socket.off('host-transferred');
     };
-  }, [roomId, isHost, getEffectiveIdentity]);
+  }, [roomId, isHost, getEffectiveIdentity, myParticipantId]);
 
   // ─── Connect As Viewer Helper ───────────────────────────────────────
 
@@ -209,6 +264,81 @@ export const App: React.FC = () => {
       console.error('[App] Failed to connect as viewer:', err);
     }
   };
+
+  // ─── Host Administrative Actions ───────────────────────────────────
+
+  const handleToggleRoomLock = useCallback(() => {
+    if (!roomId || !isHost) return;
+    const targetLocked = !isRoomLocked;
+    socket.emit('set-room-locked', { roomId, locked: targetLocked }, (res: any) => {
+      if (res.success) {
+        setIsRoomLocked(res.isLocked);
+      } else {
+        alert(res.error || 'Erro ao alterar estado da sala');
+      }
+    });
+  }, [roomId, isHost, isRoomLocked]);
+
+  const handleOpenKickModal = useCallback((targetParticipantId?: string, targetSocketId?: string, targetName?: string) => {
+    if (!roomId || !isHost) return;
+    setActionModal({
+      type: 'kick',
+      targetParticipantId,
+      targetSocketId,
+      targetName: targetName || 'o participante',
+    });
+  }, [roomId, isHost]);
+
+  const handleOpenTransferModal = useCallback((targetParticipantId?: string, targetSocketId?: string, targetName?: string) => {
+    if (!roomId || !isHost) return;
+    setActionModal({
+      type: 'transfer',
+      targetParticipantId,
+      targetSocketId,
+      targetName: targetName || 'o participante',
+    });
+  }, [roomId, isHost]);
+
+  const handleConfirmModalAction = useCallback(() => {
+    if (!actionModal || !roomId || !isHost) return;
+    const { type, targetParticipantId, targetSocketId } = actionModal;
+
+    if (type === 'kick') {
+      socket.emit('kick-participant', { roomId, targetParticipantId, targetSocketId }, (res: any) => {
+        if (res.success) {
+          if (res.members && Array.isArray(res.members)) {
+            setMembers(res.members);
+          } else {
+            setMembers((prev) =>
+              prev.filter((m) =>
+                targetParticipantId && m.participantId
+                  ? m.participantId !== targetParticipantId
+                  : m.socketId !== targetSocketId
+              )
+            );
+          }
+        }
+      });
+    } else if (type === 'transfer') {
+      socket.emit('transfer-host', { roomId, targetParticipantId, targetSocketId }, (res: any) => {
+        if (res.success) {
+          setIsHost(false);
+          if (res.members && Array.isArray(res.members)) {
+            setMembers(res.members);
+          }
+        }
+      });
+    }
+
+    setActionModal(null);
+  }, [actionModal, roomId, isHost]);
+
+  const handleCloseModalAction = useCallback(() => {
+    setActionModal(null);
+  }, []);
+
+
+
 
   // ─── Room Actions ───────────────────────────────────────────────────
 
@@ -234,6 +364,7 @@ export const App: React.FC = () => {
         setRoomId(res.roomId);
         setIsInRoom(true);
         setIsHost(true);
+        setIsRoomLocked(false);
         setMembers(res.members || [{ socketId: socket.id, participantId: res.participantId, identity, isHost: true }]);
       } else {
         alert(res.error || 'Erro ao criar sala');
@@ -264,6 +395,7 @@ export const App: React.FC = () => {
         setRoomId(res.roomId);
         setIsInRoom(true);
         setIsHost(res.isHost);
+        setIsRoomLocked(res.isLocked || false);
         setMembers(res.members || [{ socketId: socket.id, participantId: res.participantId, identity, isHost: res.isHost }]);
         connectAsViewer(res.roomId, identity);
       } else {
@@ -284,6 +416,8 @@ export const App: React.FC = () => {
     } catch (_) {}
     setMyParticipantId('');
     setIsInRoom(false);
+    setIsHost(false);
+    setIsRoomLocked(false);
     setRoomId('');
     setMembers([]);
     setRemoteStreams(new Map());
@@ -291,6 +425,7 @@ export const App: React.FC = () => {
     setStreamingIdentity(null);
     setWatchModalOpen(false);
   }, [roomId]);
+
 
 
 
@@ -652,11 +787,31 @@ export const App: React.FC = () => {
 
             {/* Mobile Scrollable Details */}
             <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
-              {/* Room Code Card */}
+              {/* Room Code Card & Lock Toggle */}
               <div className="p-3 rounded-lg bg-[#16191F] border border-[#252A34] flex items-center justify-between shadow-subtle">
                 <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180]">Sala</p>
-                  <p className="text-xs font-mono font-bold text-[#F4F6F8] tracking-wider mt-0.5">{roomId}</p>
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180]">Sala</p>
+                    {isHost ? (
+                      <button
+                        onClick={handleToggleRoomLock}
+                        title={isRoomLocked ? 'Sala trancada (toque para abrir)' : 'Sala aberta (toque para trancar)'}
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${
+                          isRoomLocked
+                            ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30 hover:bg-[#F87171]/25'
+                            : 'bg-[#34D399]/15 text-[#34D399] border border-[#34D399]/30 hover:bg-[#34D399]/25'
+                        }`}
+                      >
+                        {isRoomLocked ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
+                        {isRoomLocked ? 'Trancada' : 'Aberta'}
+                      </button>
+                    ) : isRoomLocked ? (
+                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30">
+                        <Lock className="w-2.5 h-2.5" /> Trancada
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-xs font-mono font-bold text-[#F4F6F8] tracking-wider">{roomId}</p>
                 </div>
                 <button
                   onClick={copyRoomCode}
@@ -730,9 +885,35 @@ export const App: React.FC = () => {
                               )}
                             </div>
                           </div>
+                          {isHost && (
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenTransferModal(member.participantId, member.socketId, member.identity);
+                                }}
+                                title="Tornar Host"
+                                className="p-1.5 rounded bg-[#FBBF24]/10 hover:bg-[#FBBF24]/20 text-[#FBBF24] transition"
+                              >
+                                <Crown className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenKickModal(member.participantId, member.socketId, member.identity);
+                                }}
+                                title="Expulsar da sala"
+                                className="p-1.5 rounded bg-[#F87171]/10 hover:bg-[#F87171]/20 text-[#F87171] transition"
+                              >
+                                <UserX className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+
                         </div>
                       );
                     })}
+
                 </div>
               </div>
             </div>
@@ -743,13 +924,35 @@ export const App: React.FC = () => {
             {/* ── Left Sidebar (Width: 240px) ─────────────────────────── */}
             <aside className="w-60 shrink-0 bg-[#101217] border-r border-[#1D2129] flex flex-col overflow-hidden">
               {/* Sala Header */}
-              <div className="px-4 pt-3.5 pb-2.5 border-b border-[#1D2129]">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180] mb-0.5">Sala</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-[#F4F6F8] font-mono tracking-wider">{roomId}</span>
-                  <button onClick={copyRoomCode} className="text-[#687180] hover:text-[#F4F6F8] transition" title="Copiar">
-                    {copied ? <Check className="w-3 h-3 text-[#34D399]" /> : <Copy className="w-3 h-3" />}
-                  </button>
+              <div className="px-4 pt-3.5 pb-2.5 border-b border-[#1D2129] flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180]">Sala</p>
+                    {isHost ? (
+                      <button
+                        onClick={handleToggleRoomLock}
+                        title={isRoomLocked ? 'Sala trancada (clique para abrir)' : 'Sala aberta (clique para trancar)'}
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${
+                          isRoomLocked
+                            ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30 hover:bg-[#F87171]/25'
+                            : 'bg-[#34D399]/15 text-[#34D399] border border-[#34D399]/30 hover:bg-[#34D399]/25'
+                        }`}
+                      >
+                        {isRoomLocked ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
+                        {isRoomLocked ? 'Trancada' : 'Aberta'}
+                      </button>
+                    ) : isRoomLocked ? (
+                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30">
+                        <Lock className="w-2.5 h-2.5" /> Trancada
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-[#F4F6F8] font-mono tracking-wider">{roomId}</span>
+                    <button onClick={copyRoomCode} className="text-[#687180] hover:text-[#F4F6F8] transition" title="Copiar">
+                      {copied ? <Check className="w-3 h-3 text-[#34D399]" /> : <Copy className="w-3 h-3" />}
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -820,7 +1023,7 @@ export const App: React.FC = () => {
                     return (
                       <div
                         key={member.participantId || member.socketId}
-                        className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#16191F] transition"
+                        className="group flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#16191F] transition"
                       >
                         <div className="relative shrink-0">
                           <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-medium text-[#9DA5B4] uppercase">
@@ -843,10 +1046,39 @@ export const App: React.FC = () => {
                             )}
                           </div>
                         </div>
+
+                        {/* Host Controls for Remote Member */}
+                        {isHost && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenTransferModal(member.participantId, member.socketId, member.identity);
+                              }}
+                              title="Tornar Host da sala"
+                              className="p-1 rounded bg-[#FBBF24]/10 hover:bg-[#FBBF24]/20 text-[#FBBF24] transition flex items-center justify-center"
+                            >
+                              <Crown className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenKickModal(member.participantId, member.socketId, member.identity);
+                              }}
+                              title="Expulsar da sala"
+                              className="p-1 rounded bg-[#F87171]/10 hover:bg-[#F87171]/20 text-[#F87171] transition flex items-center justify-center"
+                            >
+                              <UserX className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+
                       </div>
                     );
                   })}
               </div>
+
+
 
               {/* Bottom Stream Controls (always available when local user is not streaming) */}
 
@@ -1003,6 +1235,63 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {/* ── Action Confirmation Modal (Kick / Transfer Host) ── */}
+      {actionModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={(e) => { if (e.target === e.currentTarget) handleCloseModalAction(); }}
+        >
+          <div className="relative w-full max-w-sm rounded-xl bg-[#16191F] border border-[#252A34] shadow-2xl p-5 space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                  actionModal.type === 'kick'
+                    ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30'
+                    : 'bg-[#FBBF24]/15 text-[#FBBF24] border border-[#FBBF24]/30'
+                }`}
+              >
+                {actionModal.type === 'kick' ? <UserX className="w-5 h-5" /> : <Crown className="w-5 h-5" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-semibold text-[#F4F6F8]">
+                  {actionModal.type === 'kick' ? 'Expulsar Participante' : 'Transferir Host'}
+                </h3>
+                <p className="text-xs text-[#9DA5B4] mt-1 leading-relaxed">
+                  {actionModal.type === 'kick' ? (
+                    <>
+                      Tem certeza de que deseja expulsar <strong className="text-[#F4F6F8]">"{actionModal.targetName}"</strong> da sala? O usuário será desconectado imediatamente.
+                    </>
+                  ) : (
+                    <>
+                      Deseja transferir a liderança da sala para <strong className="text-[#F4F6F8]">"{actionModal.targetName}"</strong>? Você deixará de ser Host e passará os poderes administrativos.
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-[#1D2129]">
+              <button
+                onClick={handleCloseModalAction}
+                className="px-3.5 py-1.5 rounded-lg bg-[#1D2129] hover:bg-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmModalAction}
+                className={`px-4 py-1.5 rounded-lg text-xs font-semibold shadow-cta transition ${
+                  actionModal.type === 'kick'
+                    ? 'bg-[#F87171] hover:bg-[#EF4444] text-white'
+                    : 'bg-[#FBBF24] hover:bg-[#F59E0B] text-[#101217]'
+                }`}
+              >
+                {actionModal.type === 'kick' ? 'Expulsar' : 'Transferir'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Source Selection Modal */}
       <SourcePickerModal
         isOpen={isModalOpen}
@@ -1013,5 +1302,6 @@ export const App: React.FC = () => {
     </div>
   );
 };
+
 
 export default App;

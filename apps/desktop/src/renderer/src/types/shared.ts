@@ -75,6 +75,7 @@ export interface SignalingEvents {
       sessionToken?: string;
       sessionRole?: 'host' | 'participant';
       members?: MemberInfo[];
+      isLocked?: boolean;
       error?: string;
       code?: string;
     }) => void
@@ -90,6 +91,7 @@ export interface SignalingEvents {
       isHost: boolean;
       peers: string[];
       members?: MemberInfo[];
+      isLocked?: boolean;
       error?: string;
       code?: string;
     }) => void
@@ -105,13 +107,34 @@ export interface SignalingEvents {
     callback?: (response: { success: boolean; error?: string }) => void
   ) => void;
 
+  // Host Administrative Actions
+  'kick-participant': (
+    payload: { roomId: string; targetParticipantId: string },
+    callback?: (response: { success: boolean; error?: string; code?: string }) => void
+  ) => void;
+  'set-room-locked': (
+    payload: { roomId: string; locked: boolean },
+    callback?: (response: { success: boolean; error?: string; isLocked?: boolean }) => void
+  ) => void;
+  'transfer-host': (
+    payload: { roomId: string; targetParticipantId: string },
+    callback?: (response: { success: boolean; error?: string; newHostParticipantId?: string }) => void
+  ) => void;
+
   // Server → Client
   'user-joined': (payload: { socketId: string; identity?: string; participantId?: string; isHost?: boolean }) => void;
   'user-left': (payload: { socketId: string; participantId?: string }) => void;
   'room-members-updated': (members: MemberInfo[]) => void;
   'stream-started': (payload: { streamerSocketId: string; participantId?: string; identity?: string }) => void;
   'stream-stopped': (payload: { streamerSocketId: string; participantId?: string; identity?: string; remainingStreamersCount?: number }) => void;
+
+  // Host Administrative Server → Client
+  'kicked-from-room': (payload: { roomId: string; reason?: string }) => void;
+  'room-lock-status-changed': (payload: { roomId: string; isLocked: boolean }) => void;
+  'role-updated': (payload: { roomId: string; role: 'host' | 'participant'; isHost: boolean; sessionToken?: string }) => void;
+  'host-transferred': (payload: { roomId: string; previousHostParticipantId: string; newHostParticipantId: string }) => void;
 }
+
 
 
 // ─── Windows Audio Environment & Strategy ───────────────────────────────────
