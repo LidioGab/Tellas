@@ -14,8 +14,9 @@ function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: 'StreamCraft - High Performance Screen Sharing',
+    title: 'Tellas — Compartilhamento de Tela',
     backgroundColor: '#090A0F',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -23,6 +24,10 @@ function createWindow() {
       sandbox: false
     }
   });
+
+  mainWindow.removeMenu();
+  mainWindow.setMenuBarVisibility(false);
+
 
   // Load Vite Dev Server URL or Production Index HTML
   if (process.env.VITE_DEV_SERVER_URL) {
