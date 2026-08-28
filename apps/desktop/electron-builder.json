@@ -20,9 +20,14 @@
       "to": "packages/native-audio/index.js"
     }
   ],
+  "artifactName": "Tellas-Setup-${version}.${ext}",
   "win": {
     "icon": "build/icon.ico",
     "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
       {
         "target": "dir",
         "arch": ["x64"]
@@ -30,13 +35,19 @@
     ]
   },
   "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Tellas",
+    "uninstallDisplayName": "Tellas",
     "installerIcon": "build/icon.ico",
-    "uninstallerIcon": "build/icon.ico",
-    "uninstallDisplayName": "Tellas"
+    "uninstallerIcon": "build/icon.ico"
   },
   "asar": true,
-
   "asarUnpack": [
     "**/node_modules/ffmpeg-static/**"
   ]
 }
+

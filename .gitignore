@@ -15,7 +15,8 @@ packages/native-audio/build/
 *.pdb
 *.node
 
-# Scratch audit files
+# Scratch and temporary dev tools
+scratch/
 scratch_*
 
 # Environment files

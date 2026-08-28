@@ -127,7 +127,10 @@ export async function buildApp() {
       const now = Math.floor(Date.now() / 1000) - 600;
       const exp = now + LIVEKIT_TOKEN_TTL + 600;
 
-      const livekitJwt = await new jose.SignJWT({ video: videoGrant })
+      const livekitJwt = await new jose.SignJWT({
+        video: videoGrant,
+        name: member.identity,
+      })
         .setProtectedHeader({ alg: 'HS256' })
         .setIssuer(LIVEKIT_API_KEY)
         .setSubject(session.participantId)

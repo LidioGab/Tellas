@@ -22,7 +22,7 @@ import { VIDEO_QUALITY_PRESETS } from '@stream-app/shared';
 
 export interface RemoteStreamInfo {
   participantId: string;
-  identity: string;
+  displayName: string;
   stream: MediaStream;
 }
 
@@ -254,7 +254,7 @@ export class LiveKitService {
           '[LiveKit] Track subscribed:',
           track.kind,
           'from',
-          participant.identity,
+          participant.name || participant.identity,
           '| trackSid:',
           publication.trackSid
         );
@@ -267,7 +267,7 @@ export class LiveKitService {
     this.room.on(
       RoomEvent.TrackUnsubscribed,
       (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant) => {
-        console.log('[LiveKit] Track unsubscribed from', participant.identity);
+        console.log('[LiveKit] Track unsubscribed from', participant.name || participant.identity);
         this.handleTrackRemoved(track, participant);
       }
     );
@@ -298,9 +298,9 @@ export class LiveKitService {
 
     this.room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
       console.log('[LiveKit] Participant disconnected:', participant.identity);
-      this.participantStreams.delete(participant.sid);
+      this.participantStreams.delete(participant.identity);
       if (this.callbacks?.onRemoteTrackUnsubscribed) {
-        this.callbacks.onRemoteTrackUnsubscribed(participant.sid);
+        this.callbacks.onRemoteTrackUnsubscribed(participant.identity);
       }
     });
   }
@@ -308,10 +308,12 @@ export class LiveKitService {
   private handleTrackAdded(track: RemoteTrack, participant: RemoteParticipant) {
     if (!track.mediaStreamTrack) return;
 
-    let mediaStream = this.participantStreams.get(participant.sid);
+    // Use Tellas participantId (stored in participant.identity) for stream mapping
+    const participantId = participant.identity;
+    let mediaStream = this.participantStreams.get(participantId);
     if (!mediaStream) {
       mediaStream = new MediaStream();
-      this.participantStreams.set(participant.sid, mediaStream);
+      this.participantStreams.set(participantId, mediaStream);
     }
 
     // Replace any existing track of same kind (e.g. new video track replacing old)
@@ -324,29 +326,30 @@ export class LiveKitService {
 
     if (this.callbacks?.onRemoteTrackSubscribed) {
       this.callbacks.onRemoteTrackSubscribed({
-        participantId: participant.sid,
-        identity: participant.identity,
+        participantId,
+        displayName: participant.name || '',
         stream: new MediaStream(mediaStream.getTracks()),
       });
     }
   }
 
   private handleTrackRemoved(track: RemoteTrack, participant: RemoteParticipant) {
-    const mediaStream = this.participantStreams.get(participant.sid);
+    const participantId = participant.identity;
+    const mediaStream = this.participantStreams.get(participantId);
     if (mediaStream && track.mediaStreamTrack) {
       mediaStream.removeTrack(track.mediaStreamTrack);
     }
 
     if (!mediaStream || mediaStream.getTracks().length === 0) {
-      this.participantStreams.delete(participant.sid);
+      this.participantStreams.delete(participantId);
       if (this.callbacks?.onRemoteTrackUnsubscribed) {
-        this.callbacks.onRemoteTrackUnsubscribed(participant.sid);
+        this.callbacks.onRemoteTrackUnsubscribed(participantId);
       }
     } else {
       if (this.callbacks?.onRemoteTrackSubscribed) {
         this.callbacks.onRemoteTrackSubscribed({
-          participantId: participant.sid,
-          identity: participant.identity,
+          participantId,
+          displayName: participant.name || '',
           stream: new MediaStream(mediaStream.getTracks()),
         });
       }
@@ -365,13 +368,14 @@ export class LiveKitService {
     }
   }
 
-  public getParticipants(): Array<{ id: string; identity: string; isLocal: boolean }> {
+  public getParticipants(): Array<{ id: string; identity: string; name?: string; isLocal: boolean }> {
     if (!this.room) return [];
-    const list: Array<{ id: string; identity: string; isLocal: boolean }> = [];
+    const list: Array<{ id: string; identity: string; name?: string; isLocal: boolean }> = [];
     if (this.room.localParticipant) {
       list.push({
         id: this.room.localParticipant.sid || 'local',
         identity: this.room.localParticipant.identity,
+        name: this.room.localParticipant.name,
         isLocal: true
       });
     }
@@ -379,6 +383,7 @@ export class LiveKitService {
       list.push({
         id: p.sid,
         identity: p.identity,
+        name: p.name,
         isLocal: false
       });
     }

@@ -49,7 +49,8 @@ function generateRandomName(): string {
 
 interface RemoteStreamItem {
   stream: MediaStream;
-  identity: string;
+  participantId: string;
+  displayName: string;
 }
 
 interface ActionModalState {
@@ -91,7 +92,7 @@ export const App: React.FC = () => {
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [connectionState, setConnectionState] = useState<ConnectionState | null>(null);
 
-  // Who is streaming (identity string)
+  // Who is streaming (display name string)
   const [streamingIdentity, setStreamingIdentity] = useState<string | null>(null);
 
   // Quality preset
@@ -126,14 +127,36 @@ export const App: React.FC = () => {
     return trimmed.length > 0 ? trimmed : `User-${Math.random().toString(36).substring(2, 6)}`;
   }, [userName]);
 
+  // Resolves a user-friendly display name for a given participantId
+  const resolveDisplayName = useCallback(
+    (participantId: string, liveKitName?: string): string => {
+      const member = members.find((m) => m.participantId === participantId);
+      if (member?.identity && member.identity.trim().length > 0) {
+        return member.identity;
+      }
+      if (liveKitName && liveKitName.trim().length > 0) {
+        return liveKitName;
+      }
+      return 'Participante';
+    },
+    [members]
+  );
+
   // ─── LiveKit Callbacks ──────────────────────────────────────────────
 
   useEffect(() => {
     livekitService.setCallbacks({
       onRemoteTrackSubscribed: (info: RemoteStreamInfo) => {
-        console.log('[App] Remote track subscribed from:', info.identity);
-        setRemoteStreams((prev) => new Map(prev).set(info.participantId, { stream: info.stream, identity: info.identity }));
-        setStreamingIdentity(info.identity);
+        console.log('[App] Remote track subscribed for participantId:', info.participantId, 'displayName:', info.displayName);
+        const resolvedName = resolveDisplayName(info.participantId, info.displayName);
+        setRemoteStreams((prev) =>
+          new Map(prev).set(info.participantId, {
+            stream: info.stream,
+            participantId: info.participantId,
+            displayName: resolvedName,
+          })
+        );
+        setStreamingIdentity(resolvedName);
       },
       onRemoteTrackUnsubscribed: (participantId: string) => {
         console.log('[App] Remote track removed:', participantId);
@@ -151,7 +174,7 @@ export const App: React.FC = () => {
         console.error('[App] LiveKit error:', error);
       },
     });
-  }, []);
+  }, [resolveDisplayName, remoteStreams.size]);
 
   // ─── Socket.IO Room Events ──────────────────────────────────────────
 
@@ -194,20 +217,56 @@ export const App: React.FC = () => {
         if (me && typeof me.isHost === 'boolean') {
           setIsHost(me.isHost);
         }
+        setRemoteStreams((prev) => {
+          if (prev.size === 0) return prev;
+          let changed = false;
+          const next = new Map(prev);
+          for (const [pid, item] of next.entries()) {
+            const member = updatedMembers.find((m) => m.participantId === pid);
+            if (member?.identity && member.identity !== item.displayName) {
+              next.set(pid, { ...item, displayName: member.identity });
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
       }
     });
 
-    socket.on('stream-started', ({ identity }: { identity?: string } = {}) => {
+    socket.on('stream-started', ({ participantId, identity }: { streamerSocketId?: string; participantId?: string; identity?: string } = {}) => {
       if (identity) setStreamingIdentity(identity);
+      if (participantId && identity) {
+        setRemoteStreams((prev) => {
+          const existing = prev.get(participantId);
+          if (existing && existing.displayName !== identity) {
+            const next = new Map(prev);
+            next.set(participantId, { ...existing, displayName: identity });
+            return next;
+          }
+          return prev;
+        });
+      }
       if (roomId && !isHost && !livekitService.connected) {
         connectAsViewer(roomId, getEffectiveIdentity());
       }
     });
 
-    socket.on('stream-stopped', () => {
-      setRemoteStreams(new Map());
-      setStreamingIdentity(null);
-      setWatchModalOpen(false);
+    socket.on('stream-stopped', ({ participantId }: { participantId?: string } = {}) => {
+      if (participantId) {
+        setRemoteStreams((prev) => {
+          if (!prev.has(participantId)) return prev;
+          const next = new Map(prev);
+          next.delete(participantId);
+          return next;
+        });
+        if (remoteStreams.size <= 1) {
+          setStreamingIdentity(null);
+        }
+      } else {
+        setRemoteStreams(new Map());
+        setStreamingIdentity(null);
+        setWatchModalOpen(false);
+      }
     });
 
     // ─── Host Administrative Events ──────────────────────────────────
@@ -687,7 +746,7 @@ export const App: React.FC = () => {
                   key={activeStreamEntry[0]}
                   remoteStream={activeStreamEntry[1].stream}
                   peerId={activeStreamEntry[0]}
-                  streamerName={activeStreamEntry[1].identity}
+                  streamerName={activeStreamEntry[1].displayName}
                   roomId={roomId}
                   memberCount={members.length}
                 />
@@ -708,7 +767,7 @@ export const App: React.FC = () => {
                           }`}
                         >
                           <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-[#F87171]'}`} />
-                          {item.identity}
+                          {item.displayName}
                         </button>
                       );
                     })}
@@ -744,7 +803,7 @@ export const App: React.FC = () => {
                   key={activeStreamEntry[0]}
                   remoteStream={activeStreamEntry[1].stream}
                   peerId={activeStreamEntry[0]}
-                  streamerName={activeStreamEntry[1].identity}
+                  streamerName={activeStreamEntry[1].displayName}
                   roomId={roomId}
                   memberCount={members.length}
                 />
@@ -778,7 +837,7 @@ export const App: React.FC = () => {
                       }`}
                     >
                       <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-[#F87171]'}`} />
-                      {item.identity}
+                      {item.displayName}
                     </button>
                   );
                 })}
@@ -848,15 +907,17 @@ export const App: React.FC = () => {
                   {members
                     .filter((m) => (myParticipantId && m.participantId ? m.participantId !== myParticipantId : m.socketId !== socket.id))
                     .map((member) => {
-                      const streamItem = Array.from(remoteStreams.entries()).find(([_, s]) => s.identity === member.identity);
+                      const streamItem = member.participantId ? remoteStreams.get(member.participantId) : null;
                       const isStreamingRemote = !!streamItem;
-                      const isCurrentlyWatching = streamItem && activeStreamEntry?.[0] === streamItem[0];
+                      const isCurrentlyWatching = !!(member.participantId && activeStreamEntry?.[0] === member.participantId);
 
                       return (
                         <div
                           key={member.participantId || member.socketId}
                           onClick={() => {
-                            if (streamItem) setSelectedStreamParticipantId(streamItem[0]);
+                            if (member.participantId && remoteStreams.has(member.participantId)) {
+                              setSelectedStreamParticipantId(member.participantId);
+                            }
                           }}
                           className={`flex items-center gap-2.5 px-3 py-2.5 transition ${
                             streamItem ? 'cursor-pointer hover:bg-[#1D2129]' : ''
@@ -963,7 +1024,7 @@ export const App: React.FC = () => {
                     <span className="w-2 h-2 rounded-full bg-[#F87171] shrink-0" />
                     <div className="truncate">
                       <p className="text-xs font-medium text-[#F4F6F8] truncate leading-tight">
-                        {item.identity}
+                        {item.displayName}
                       </p>
                       <p className="text-[11px] text-[#687180]">Transmitindo</p>
                     </div>
@@ -1019,7 +1080,7 @@ export const App: React.FC = () => {
                 {members
                   .filter((m) => (myParticipantId && m.participantId ? m.participantId !== myParticipantId : m.socketId !== socket.id))
                   .map((member) => {
-                    const isStreamer = Array.from(remoteStreams.values()).some((s) => s.identity === member.identity) || streamingIdentity === member.identity;
+                    const isStreamer = !!(member.participantId && remoteStreams.has(member.participantId));
                     return (
                       <div
                         key={member.participantId || member.socketId}
@@ -1157,7 +1218,7 @@ export const App: React.FC = () => {
                       <h3 className="text-[17px] font-semibold text-[#EDEFF3]">
                         {hasAnyRemoteStream
                           ? remoteStreams.size === 1
-                            ? `${Array.from(remoteStreams.values())[0]?.identity || 'Alguém'} está transmitindo`
+                            ? `${Array.from(remoteStreams.values())[0]?.displayName || 'Alguém'} está transmitindo`
                             : `${remoteStreams.size} transmissões ao vivo disponíveis`
                           : 'Nenhuma transmissão ativa'}
                       </h3>
@@ -1181,7 +1242,7 @@ export const App: React.FC = () => {
                               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white font-medium text-xs shadow-cta transition transform hover:-translate-y-0.5"
                             >
                               <Play className="w-3.5 h-3.5 fill-white" />
-                              Assistir {item.identity}
+                              Assistir {item.displayName}
                             </button>
                           ))}
                         </div>
@@ -1226,7 +1287,7 @@ export const App: React.FC = () => {
             <StreamViewer
               remoteStream={activeStreamEntry[1].stream}
               peerId={activeStreamEntry[0]}
-              streamerName={activeStreamEntry[1].identity}
+              streamerName={activeStreamEntry[1].displayName}
               roomId={roomId}
               memberCount={members.length}
               onClose={() => setWatchModalOpen(false)}

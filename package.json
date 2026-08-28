@@ -14,7 +14,9 @@
     "build:native": "npm run build --workspace=packages/native-audio",
     "build:renderer": "npm run build:renderer --workspace=apps/desktop",
     "build": "npm run build:shared && npm run build:renderer --workspace=apps/desktop",
-    "package:desktop": "npm run package --workspace=apps/desktop"
+    "package:desktop": "npm run package --workspace=apps/desktop",
+    "package:installer": "npm run package:installer --workspace=apps/desktop"
   }
+
 
 }
