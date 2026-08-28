@@ -21,6 +21,7 @@
     }
   ],
   "win": {
+    "icon": "build/icon.ico",
     "target": [
       {
         "target": "dir",
@@ -28,7 +29,13 @@
       }
     ]
   },
+  "nsis": {
+    "installerIcon": "build/icon.ico",
+    "uninstallerIcon": "build/icon.ico",
+    "uninstallDisplayName": "Tellas"
+  },
   "asar": true,
+
   "asarUnpack": [
     "**/node_modules/ffmpeg-static/**"
   ]

@@ -20,7 +20,9 @@ export const TellasLogo: React.FC<TellasLogoProps> = ({
         role="img"
         aria-label="Tellas Logo"
         className="w-full h-full object-contain relative z-10 select-none pointer-events-none drop-shadow-sm"
+        style={{ width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%' }}
       >
+
         {/* Outer ring */}
         <circle cx="512" cy="512" r="458" fill="#ffffff" stroke="#000000" strokeWidth="18" />
         {/* Inner black disc, leaving a white ring */}

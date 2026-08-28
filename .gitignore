@@ -7,7 +7,9 @@ node_modules/
 dist/
 release/
 build/
+!apps/desktop/build/
 packages/native-audio/build/
+
 *.obj
 *.exe
 *.pdb

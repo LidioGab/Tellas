@@ -1,6 +1,8 @@
 import { app, BrowserWindow, ipcMain, desktopCapturer } from 'electron';
 import path from 'path';
+import fs from 'fs';
 import { discordAudioIsolationService } from './DiscordAudioIsolationService';
+
 
 // Enable Chromium Desktop System Audio & Screen Capturing Switches
 app.commandLine.appendSwitch('enable-usermedia-screen-capturing');
@@ -8,7 +10,25 @@ app.commandLine.appendSwitch('allow-http-screen-capture');
 
 let mainWindow: BrowserWindow | null = null;
 
+function getAppIconPath(): string | undefined {
+  const possiblePaths = [
+    path.join(__dirname, '../../build/icon.ico'),
+    path.join(__dirname, '../../build/icon.png'),
+    path.join(process.resourcesPath, 'build/icon.ico'),
+    path.join(process.resourcesPath, 'build/icon.png'),
+    path.join(__dirname, '../renderer/favicon.ico'),
+    path.join(__dirname, '../renderer/logo.png'),
+  ];
+
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) return p;
+  }
+  return undefined;
+}
+
 function createWindow() {
+  const iconPath = getAppIconPath();
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -17,6 +37,7 @@ function createWindow() {
     title: 'Tellas — Compartilhamento de Tela',
     backgroundColor: '#090A0F',
     autoHideMenuBar: true,
+    ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -27,6 +48,7 @@ function createWindow() {
 
   mainWindow.removeMenu();
   mainWindow.setMenuBarVisibility(false);
+
 
 
   // Load Vite Dev Server URL or Production Index HTML
