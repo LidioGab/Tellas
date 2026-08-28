@@ -56,6 +56,8 @@ export class LiveKitService {
   private backendUrl: string;
   private participantStreams: Map<string, MediaStream> = new Map();
   private sessionToken: string | null = null;
+  private connectingPromise: Promise<void> | null = null;
+  private reconciliationTimers: ReturnType<typeof setTimeout>[] = [];
 
   constructor() {
     this.backendUrl = getBackendUrl();
@@ -114,36 +116,65 @@ export class LiveKitService {
     return data;
   }
 
-
   // ─── Connect to Room ────────────────────────────────────────────────
 
   public async connect(tokenResponse: LiveKitTokenResponse): Promise<void> {
-    // Clean up any existing connection
-    await this.disconnect();
-
-    this.room = new Room({
-      adaptiveStream: true,
-      dynacast: true,
-      videoCaptureDefaults: {
-        resolution: VideoPresets.h1080.resolution,
-      },
-    });
-
-    this.setupRoomEventListeners();
-
-    console.log('[LiveKit] Connecting to:', tokenResponse.livekitUrl, 'with room:', tokenResponse.roomName);
-    await this.room.connect(tokenResponse.livekitUrl, tokenResponse.token, {
-      autoSubscribe: true,
-    });
-
-    console.log('[LiveKit] Connected to room:', tokenResponse.roomName, '| state:', this.room.state);
-
-    if (this.callbacks?.onConnectionStateChanged) {
-      this.callbacks.onConnectionStateChanged(this.room.state);
+    // If already connected to the same room, avoid reconnecting
+    if (this.connected && this.room?.name === tokenResponse.roomName) {
+      console.log('[LiveKit] Already connected to room:', tokenResponse.roomName);
+      return;
     }
 
-    // Check if any remote participants already have active subscribed tracks
-    this.syncExistingTracks();
+    // If a connection is already in flight, return the existing promise
+    if (this.connectingPromise) {
+      console.log('[LiveKit] Connection already in progress for room:', tokenResponse.roomName);
+      return this.connectingPromise;
+    }
+
+    this.connectingPromise = (async () => {
+      try {
+        // Clean up any existing connection
+        await this.disconnect();
+
+        this.room = new Room({
+          adaptiveStream: true,
+          dynacast: true,
+          videoCaptureDefaults: {
+            resolution: VideoPresets.h1080.resolution,
+          },
+        });
+
+        this.setupRoomEventListeners();
+
+        console.log('[LiveKit] Connecting to:', tokenResponse.livekitUrl, 'with room:', tokenResponse.roomName);
+        await this.room.connect(tokenResponse.livekitUrl, tokenResponse.token, {
+          autoSubscribe: true,
+        });
+
+        console.log('[LiveKit] Connected to room:', tokenResponse.roomName, '| state:', this.room.state);
+
+        if (this.callbacks?.onConnectionStateChanged) {
+          this.callbacks.onConnectionStateChanged(this.room.state);
+        }
+
+        // Check if any remote participants already have active subscribed tracks
+        this.syncExistingTracks();
+
+        // Bounded reconciliation retries to catch tracks whose WebRTC subscription resolves after connect()
+        this.clearReconciliationTimers();
+        const timer1 = setTimeout(() => {
+          if (this.connected) this.syncExistingTracks();
+        }, 300);
+        const timer2 = setTimeout(() => {
+          if (this.connected) this.syncExistingTracks();
+        }, 1000);
+        this.reconciliationTimers.push(timer1, timer2);
+      } finally {
+        this.connectingPromise = null;
+      }
+    })();
+
+    return this.connectingPromise;
   }
 
   // ─── Publish Stream ─────────────────────────────────────────────────
@@ -211,7 +242,13 @@ export class LiveKitService {
 
   // ─── Disconnect ─────────────────────────────────────────────────────
 
+  private clearReconciliationTimers(): void {
+    this.reconciliationTimers.forEach((timer) => clearTimeout(timer));
+    this.reconciliationTimers = [];
+  }
+
   public async disconnect(): Promise<void> {
+    this.clearReconciliationTimers();
     if (!this.room) return;
 
     try {
@@ -232,6 +269,10 @@ export class LiveKitService {
     return this.room?.state === ConnectionState.Connected;
   }
 
+  public get isConnecting(): boolean {
+    return this.connectingPromise !== null;
+  }
+
   public get connectionState(): ConnectionState | null {
     return this.room?.state ?? null;
   }
@@ -245,6 +286,25 @@ export class LiveKitService {
 
   private setupRoomEventListeners(): void {
     if (!this.room) return;
+
+    // Remote track published — SFU announced a new publication
+    this.room.on(
+      RoomEvent.TrackPublished,
+      (publication: RemoteTrackPublication, participant: RemoteParticipant) => {
+        console.log(
+          '[LiveKit] Track published:',
+          publication.kind,
+          'from',
+          participant.name || participant.identity,
+          '| trackSid:',
+          publication.trackSid
+        );
+        // Schedule reconciliation in case autoSubscribe resolves shortly
+        setTimeout(() => {
+          if (this.connected) this.syncExistingTracks();
+        }, 200);
+      }
+    );
 
     // Remote track subscribed — viewer receives a track from SFU
     this.room.on(
@@ -314,6 +374,12 @@ export class LiveKitService {
     if (!mediaStream) {
       mediaStream = new MediaStream();
       this.participantStreams.set(participantId, mediaStream);
+    }
+
+    const existingTrack = mediaStream.getTracks().find((t) => t.id === track.mediaStreamTrack!.id);
+    if (existingTrack) {
+      // Idempotent: track already added
+      return;
     }
 
     // Replace any existing track of same kind (e.g. new video track replacing old)

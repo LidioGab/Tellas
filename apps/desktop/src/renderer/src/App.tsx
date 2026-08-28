@@ -246,7 +246,7 @@ export const App: React.FC = () => {
           return prev;
         });
       }
-      if (roomId && !isHost && !livekitService.connected) {
+      if (roomId && !livekitService.connected && !livekitService.isConnecting) {
         connectAsViewer(roomId, getEffectiveIdentity());
       }
     });
@@ -315,14 +315,15 @@ export const App: React.FC = () => {
 
   // ─── Connect As Viewer Helper ───────────────────────────────────────
 
-  const connectAsViewer = async (room: string, identity: string) => {
+  const connectAsViewer = useCallback(async (room: string, identity: string) => {
+    if (livekitService.connected || livekitService.isConnecting) return;
     try {
       const tokenResponse = await livekitService.requestToken({ roomId: room, identity, role: 'viewer' });
       await livekitService.connect(tokenResponse);
     } catch (err: any) {
       console.error('[App] Failed to connect as viewer:', err);
     }
-  };
+  }, []);
 
   // ─── Host Administrative Actions ───────────────────────────────────
 
@@ -425,11 +426,12 @@ export const App: React.FC = () => {
         setIsHost(true);
         setIsRoomLocked(false);
         setMembers(res.members || [{ socketId: socket.id, participantId: res.participantId, identity, isHost: true }]);
+        connectAsViewer(res.roomId, identity);
       } else {
         alert(res.error || 'Erro ao criar sala');
       }
     });
-  }, [getEffectiveIdentity]);
+  }, [getEffectiveIdentity, connectAsViewer]);
 
   const handleJoinRoom = useCallback((e: React.FormEvent) => {
     e.preventDefault();
