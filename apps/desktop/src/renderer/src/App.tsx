@@ -562,10 +562,8 @@ export const App: React.FC = () => {
       {/* ── Topbar (Height: 48px) ────────────────────────────────────── */}
       <header className="h-12 px-4 bg-[#101217] border-b border-[#1D2129] flex items-center justify-between z-30 shrink-0">
         {/* Left: Branding & Room info */}
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-md bg-[#16191F] border border-[#252A34] flex items-center justify-center">
-            <TellasLogo className="w-3.5 h-3.5 text-[#5B7CFA]" />
-          </div>
+        <div className="flex items-center gap-2.5">
+          <TellasLogo className="w-6 h-6" />
           <span className="font-semibold text-sm text-[#F4F6F8] tracking-tight">Tellas</span>
           {isInRoom && (
             <div className="flex items-center gap-1.5 ml-1">
@@ -581,6 +579,7 @@ export const App: React.FC = () => {
             </div>
           )}
         </div>
+
 
         {/* Right: User Profile & Leave Action */}
         <div className="flex items-center gap-2">
@@ -612,15 +611,16 @@ export const App: React.FC = () => {
             <div className="w-full max-w-sm bg-[#16191F] p-7 rounded-xl border border-[#252A34] shadow-card space-y-5">
               
               {/* Header Icon & Title */}
-              <div className="text-center space-y-1.5">
-                <div className="w-12 h-12 rounded-xl bg-[#101217] border border-[#252A34] mx-auto flex items-center justify-center shadow-subtle mb-2">
-                  <TellasLogo className="w-6 h-6 text-[#5B7CFA]" />
+              <div className="text-center space-y-2">
+                <div className="flex justify-center mb-1">
+                  <TellasLogo className="w-14 h-14" glow />
                 </div>
-                <h1 className="text-lg font-semibold text-[#F4F6F8] tracking-tight">Tellas</h1>
+                <h1 className="text-xl font-bold text-[#F4F6F8] tracking-tight">Tellas</h1>
                 <p className="text-xs text-[#9DA5B4]">
                   Compartilhamento de tela em tempo real com áudio isolado.
                 </p>
               </div>
+
 
               {/* Display Name Input */}
               <div className="space-y-1.5">
