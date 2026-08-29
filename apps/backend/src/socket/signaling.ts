@@ -365,6 +365,7 @@ export function setupSignaling(io: SocketIOServer) {
                 isLocked: room.isLocked,
                 peers: otherPeers,
                 members: memberList,
+                activeStreamers: Array.from(room.activeStreamers),
               });
             }
             return;
@@ -460,6 +461,7 @@ export function setupSignaling(io: SocketIOServer) {
             isLocked: room.isLocked,
             peers: otherPeers,
             members: memberList,
+            activeStreamers: Array.from(room.activeStreamers),
           });
         }
 
@@ -906,6 +908,7 @@ function handleExplicitLeave(socket: Socket, roomId: string) {
 }
 
 
+
 /**
  * Handles an involuntary disconnect with a grace period timer to allow reconnects.
  */
@@ -967,4 +970,3 @@ function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
     member.disconnectTimer.unref();
   }
 }
-

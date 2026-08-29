@@ -1,6 +1,6 @@
 {
   "name": "@stream-app/desktop",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Tellas — Compartilhamento de tela em tempo real com áudio isolado",
   "author": "Tellas",
   "private": true,

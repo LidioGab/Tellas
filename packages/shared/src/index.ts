@@ -75,6 +75,7 @@ export interface SignalingEvents {
       sessionToken?: string;
       sessionRole?: 'host' | 'participant';
       members?: MemberInfo[];
+      activeStreamers?: string[];
       isLocked?: boolean;
       error?: string;
       code?: string;
@@ -91,6 +92,7 @@ export interface SignalingEvents {
       isHost: boolean;
       peers: string[];
       members?: MemberInfo[];
+      activeStreamers?: string[];
       isLocked?: boolean;
       error?: string;
       code?: string;

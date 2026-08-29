@@ -234,12 +234,18 @@ export class DiscordAudioIsolationService extends EventEmitter {
       resolverLog(`DetectorResult:\n  status=${detectionResult.reason}`);
     }
 
+    const detectionReason = detectionResult.success ? 'OK' : detectionResult.reason;
+    const detectionRoots = !detectionResult.success && 'roots' in detectionResult
+      ? detectionResult.roots.join(', ')
+      : 'N/A';
+    const resolverTier = detectionResult.success ? detectionResult.evidence : 'NONE';
+
     win10AudioLogger.logImmediate('MAIN', 'DISCORD', {
       detected: detectionResult.success,
-      reason: detectionResult.reason || 'OK',
-      roots: detectionResult.roots?.join(', ') || 'N/A',
+      reason: detectionReason,
+      roots: detectionRoots,
       selectedRootPid: detectionResult.success ? detectionResult.rootPid : 0,
-      resolverTier: detectionResult.evidence || 'NONE',
+      resolverTier,
       ambiguous: !detectionResult.success && (detectionResult.reason === 'AMBIGUOUS_AUDIO_ROOTS' || detectionResult.reason === 'AMBIGUOUS_ROOTS')
     });
 

@@ -31,6 +31,8 @@ export interface LiveKitCallbacks {
   onRemoteTrackUnsubscribed: (participantId: string) => void;
   onConnectionStateChanged: (state: ConnectionState) => void;
   onError: (error: Error) => void;
+  onSubscriptionFailed?: (participantId: string, error: Error) => void;
+  onParticipantDisconnected?: (participantId: string) => void;
 }
 
 // ─── Backend URL ────────────────────────────────────────────────────────────
@@ -58,6 +60,10 @@ export class LiveKitService {
   private sessionToken: string | null = null;
   private connectingPromise: Promise<void> | null = null;
   private reconciliationTimers: ReturnType<typeof setTimeout>[] = [];
+  private currentlySubscribedParticipantId: string | null = null;
+  private subscriptionGeneration = 0;
+  private publicationGenerations = new Map<string, number>();
+  private subscriptionTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.backendUrl = getBackendUrl();
@@ -148,7 +154,7 @@ export class LiveKitService {
 
         console.log('[LiveKit] Connecting to:', tokenResponse.livekitUrl, 'with room:', tokenResponse.roomName);
         await this.room.connect(tokenResponse.livekitUrl, tokenResponse.token, {
-          autoSubscribe: true,
+          autoSubscribe: false,
         });
 
         console.log('[LiveKit] Connected to room:', tokenResponse.roomName, '| state:', this.room.state);
@@ -157,7 +163,7 @@ export class LiveKitService {
           this.callbacks.onConnectionStateChanged(this.room.state);
         }
 
-        // Check if any remote participants already have active subscribed tracks
+        // Reconcile only media explicitly requested by the current watch target.
         this.syncExistingTracks();
 
         // Bounded reconciliation retries to catch tracks whose WebRTC subscription resolves after connect()
@@ -247,8 +253,16 @@ export class LiveKitService {
     this.reconciliationTimers = [];
   }
 
+  private clearSubscriptionTimeout(): void {
+    if (this.subscriptionTimeout) clearTimeout(this.subscriptionTimeout);
+    this.subscriptionTimeout = null;
+  }
+
   public async disconnect(): Promise<void> {
     this.clearReconciliationTimers();
+    this.clearSubscriptionTimeout();
+    this.subscriptionGeneration++;
+    await this.unsubscribeAll();
     if (!this.room) return;
 
     try {
@@ -259,6 +273,8 @@ export class LiveKitService {
     } finally {
       this.room = null;
       this.participantStreams.clear();
+      this.currentlySubscribedParticipantId = null;
+      this.publicationGenerations.clear();
       console.log('[LiveKit] Disconnected');
     }
   }
@@ -282,6 +298,86 @@ export class LiveKitService {
     return this.room.remoteParticipants.size + 1;
   }
 
+  private isAllowedSource(source: Track.Source): boolean {
+    return source === Track.Source.ScreenShare || source === Track.Source.ScreenShareAudio;
+  }
+
+  private findParticipant(participantId: string): RemoteParticipant | undefined {
+    return this.room
+      ? Array.from(this.room.remoteParticipants.values()).find((participant) => participant.identity === participantId)
+      : undefined;
+  }
+
+  private requestPublication(publication: RemoteTrackPublication, participantId: string, generation: number): void {
+    if (!this.isAllowedSource(publication.source)) return;
+    if (participantId !== this.currentlySubscribedParticipantId || generation !== this.subscriptionGeneration) return;
+    this.publicationGenerations.set(publication.trackSid, generation);
+    console.log('[LIVEKIT][SUBSCRIBE_PUBLICATION]', { participantId, source: publication.source, publicationSid: publication.trackSid });
+    publication.setSubscribed(true);
+  }
+
+  public async subscribeToParticipant(participantId: string): Promise<void> {
+    const previous = this.currentlySubscribedParticipantId;
+    if (previous && previous !== participantId) await this.unsubscribeFromParticipant(previous, false);
+
+    const generation = ++this.subscriptionGeneration;
+    this.clearSubscriptionTimeout();
+    this.currentlySubscribedParticipantId = participantId;
+    this.participantStreams.delete(participantId);
+    this.callbacks?.onRemoteTrackUnsubscribed(participantId);
+    console.log('[LIVEKIT][SUBSCRIBE_REQUEST]', { participantId, generation });
+
+    const participant = this.findParticipant(participantId);
+    if (participant) {
+      for (const publication of participant.trackPublications.values()) {
+        this.requestPublication(publication, participantId, generation);
+      }
+    }
+
+    this.subscriptionTimeout = setTimeout(() => {
+      if (generation !== this.subscriptionGeneration || participantId !== this.currentlySubscribedParticipantId) return;
+      const error = new Error('Não foi possível conectar à transmissão.');
+      this.subscriptionGeneration++;
+      void this.unsubscribeFromParticipant(participantId).finally(() => {
+        this.callbacks?.onSubscriptionFailed?.(participantId, error);
+      });
+    }, 10_000);
+  }
+
+  public async unsubscribeFromParticipant(participantId: string, invalidate = true): Promise<void> {
+    if (invalidate) this.subscriptionGeneration++;
+    this.clearSubscriptionTimeout();
+    console.log('[LIVEKIT][UNSUBSCRIBE_REQUEST]', { participantId });
+    const participant = this.findParticipant(participantId);
+    if (participant) {
+      for (const publication of participant.trackPublications.values()) {
+        if (this.isAllowedSource(publication.source)) {
+          this.publicationGenerations.delete(publication.trackSid);
+          publication.setSubscribed(false);
+        }
+      }
+    }
+    this.participantStreams.delete(participantId);
+    this.callbacks?.onRemoteTrackUnsubscribed(participantId);
+    if (this.currentlySubscribedParticipantId === participantId) this.currentlySubscribedParticipantId = null;
+  }
+
+  public async unsubscribeAll(): Promise<void> {
+    this.subscriptionGeneration++;
+    this.clearSubscriptionTimeout();
+    if (this.room) {
+      for (const participant of this.room.remoteParticipants.values()) {
+        for (const publication of participant.trackPublications.values()) {
+          if (this.isAllowedSource(publication.source)) publication.setSubscribed(false);
+        }
+      }
+    }
+    for (const participantId of this.participantStreams.keys()) this.callbacks?.onRemoteTrackUnsubscribed(participantId);
+    this.participantStreams.clear();
+    this.publicationGenerations.clear();
+    this.currentlySubscribedParticipantId = null;
+  }
+
   // ─── Room Event Listeners ───────────────────────────────────────────
 
   private setupRoomEventListeners(): void {
@@ -299,10 +395,9 @@ export class LiveKitService {
           '| trackSid:',
           publication.trackSid
         );
-        // Schedule reconciliation in case autoSubscribe resolves shortly
-        setTimeout(() => {
-          if (this.connected) this.syncExistingTracks();
-        }, 200);
+        if (participant.identity === this.currentlySubscribedParticipantId && this.isAllowedSource(publication.source)) {
+          this.requestPublication(publication, participant.identity, this.subscriptionGeneration);
+        }
       }
     );
 
@@ -319,7 +414,18 @@ export class LiveKitService {
           publication.trackSid
         );
 
+        const requestedGeneration = this.publicationGenerations.get(publication.trackSid);
+        if (
+          !this.isAllowedSource(publication.source) ||
+          participant.identity !== this.currentlySubscribedParticipantId ||
+          requestedGeneration !== this.subscriptionGeneration
+        ) {
+          publication.setSubscribed(false);
+          return;
+        }
+        console.log('[LIVEKIT][TRACK_SUBSCRIBED]', { participantId: participant.identity, kind: track.kind, source: publication.source });
         this.handleTrackAdded(track, participant);
+        if (track.kind === Track.Kind.Video) this.clearSubscriptionTimeout();
       }
     );
 
@@ -327,7 +433,7 @@ export class LiveKitService {
     this.room.on(
       RoomEvent.TrackUnsubscribed,
       (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant) => {
-        console.log('[LiveKit] Track unsubscribed from', participant.name || participant.identity);
+        console.log('[LIVEKIT][TRACK_UNSUBSCRIBED]', { participantId: participant.identity, kind: track.kind });
         this.handleTrackRemoved(track, participant);
       }
     );
@@ -346,7 +452,20 @@ export class LiveKitService {
 
     this.room.on(RoomEvent.Reconnected, () => {
       console.log('[LiveKit] Reconnected!');
+      console.log('[LIVEKIT][RECONNECT_RESUBSCRIBE]', { participantId: this.currentlySubscribedParticipantId });
       this.syncExistingTracks();
+    });
+
+    this.room.on(RoomEvent.TrackSubscriptionFailed, (trackSid: string, participant: RemoteParticipant, cause?: unknown) => {
+      if (participant.identity !== this.currentlySubscribedParticipantId) return;
+      const publication = participant.trackPublications.get(trackSid);
+      if (publication && !this.isAllowedSource(publication.source)) return;
+      const error = cause instanceof Error ? cause : new Error('Não foi possível conectar à transmissão.');
+      console.warn('[LIVEKIT][SUBSCRIPTION_FAILED]', { participantId: participant.identity, trackSid });
+      this.subscriptionGeneration++;
+      void this.unsubscribeFromParticipant(participant.identity).finally(() => {
+        this.callbacks?.onSubscriptionFailed?.(participant.identity, error);
+      });
     });
 
     this.room.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
@@ -362,6 +481,12 @@ export class LiveKitService {
       if (this.callbacks?.onRemoteTrackUnsubscribed) {
         this.callbacks.onRemoteTrackUnsubscribed(participant.identity);
       }
+      if (participant.identity === this.currentlySubscribedParticipantId) {
+        this.subscriptionGeneration++;
+        this.clearSubscriptionTimeout();
+        this.currentlySubscribedParticipantId = null;
+      }
+      this.callbacks?.onParticipantDisconnected?.(participant.identity);
     });
   }
 
@@ -425,9 +550,15 @@ export class LiveKitService {
   private syncExistingTracks() {
     if (!this.room) return;
 
+    const target = this.currentlySubscribedParticipantId;
+    if (!target) return;
+    const generation = this.subscriptionGeneration;
     for (const participant of this.room.remoteParticipants.values()) {
+      if (participant.identity !== target) continue;
       for (const publication of participant.trackPublications.values()) {
-        if (publication.isSubscribed && publication.track) {
+        if (!this.isAllowedSource(publication.source)) continue;
+        this.requestPublication(publication, target, generation);
+        if (publication.isSubscribed && publication.track && this.publicationGenerations.get(publication.trackSid) === generation) {
           this.handleTrackAdded(publication.track, participant);
         }
       }

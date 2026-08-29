@@ -59,6 +59,11 @@ interface RemoteStreamItem {
   displayName: string;
 }
 
+interface ActiveStreamerInfo {
+  participantId: string;
+  displayName: string;
+}
+
 interface ActionModalState {
   type: 'kick' | 'transfer';
   targetParticipantId?: string;
@@ -96,6 +101,9 @@ export const App: React.FC = () => {
   const [selectedSource, setSelectedSource] = useState<DesktopSource | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, RemoteStreamItem>>(new Map());
+  const [activeStreamers, setActiveStreamers] = useState<Map<string, ActiveStreamerInfo>>(new Map());
+  const [isStreamLoading, setIsStreamLoading] = useState<boolean>(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [connectionState, setConnectionState] = useState<ConnectionState | null>(null);
 
@@ -122,6 +130,12 @@ export const App: React.FC = () => {
   }, []);
 
   const hasAnyRemoteStream = remoteStreams.size > 0;
+  const hasAnyActiveStreamer = activeStreamers.size > 0;
+  const selectedStreamParticipantIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedStreamParticipantIdRef.current = selectedStreamParticipantId;
+  }, [selectedStreamParticipantId]);
 
   // Handle nickname persistence
   const handleNameChange = (name: string) => {
@@ -164,9 +178,13 @@ export const App: React.FC = () => {
           })
         );
         setStreamingIdentity(resolvedName);
+        if (info.participantId === selectedStreamParticipantIdRef.current && info.stream.getVideoTracks().length > 0) {
+          setIsStreamLoading(false);
+          setStreamError(null);
+        }
       },
       onRemoteTrackUnsubscribed: (participantId: string) => {
-        console.log('[App] Remote track removed:', participantId);
+        console.log('[App] Remote media state cleared:', participantId);
         setRemoteStreams((prev) => {
           const next = new Map(prev);
           next.delete(participantId);
@@ -179,6 +197,23 @@ export const App: React.FC = () => {
       },
       onError: (error: Error) => {
         console.error('[App] LiveKit error:', error);
+      },
+      onSubscriptionFailed: (participantId: string, error: Error) => {
+        if (participantId !== selectedStreamParticipantIdRef.current) return;
+        setIsStreamLoading(false);
+        setStreamError(error.message || 'Não foi possível conectar à transmissão.');
+      },
+      onParticipantDisconnected: (participantId: string) => {
+        setActiveStreamers((prev) => {
+          const next = new Map(prev);
+          next.delete(participantId);
+          return next;
+        });
+        if (participantId === selectedStreamParticipantIdRef.current) {
+          setSelectedStreamParticipantId(null);
+          setWatchModalOpen(false);
+          setIsStreamLoading(false);
+        }
       },
     });
   }, [resolveDisplayName, remoteStreams.size]);
@@ -212,6 +247,19 @@ export const App: React.FC = () => {
           return m.socketId !== socketId;
         })
       );
+      if (participantId) {
+        setActiveStreamers((prev) => {
+          const next = new Map(prev);
+          next.delete(participantId);
+          return next;
+        });
+        if (participantId === selectedStreamParticipantIdRef.current) {
+          void livekitService.unsubscribeFromParticipant(participantId);
+          setSelectedStreamParticipantId(null);
+          setWatchModalOpen(false);
+          setIsStreamLoading(false);
+        }
+      }
     });
 
     socket.on('room-members-updated', (updatedMembers: Member[]) => {
@@ -242,16 +290,11 @@ export const App: React.FC = () => {
 
     socket.on('stream-started', ({ participantId, identity }: { streamerSocketId?: string; participantId?: string; identity?: string } = {}) => {
       if (identity) setStreamingIdentity(identity);
-      if (participantId && identity) {
-        setRemoteStreams((prev) => {
-          const existing = prev.get(participantId);
-          if (existing && existing.displayName !== identity) {
-            const next = new Map(prev);
-            next.set(participantId, { ...existing, displayName: identity });
-            return next;
-          }
-          return prev;
-        });
+      if (participantId) {
+        setActiveStreamers((prev) => new Map(prev).set(participantId, {
+          participantId,
+          displayName: identity || resolveDisplayName(participantId),
+        }));
       }
       if (roomId && !livekitService.connected && !livekitService.isConnecting) {
         connectAsViewer(roomId, getEffectiveIdentity());
@@ -260,16 +303,20 @@ export const App: React.FC = () => {
 
     socket.on('stream-stopped', ({ participantId }: { participantId?: string } = {}) => {
       if (participantId) {
-        setRemoteStreams((prev) => {
-          if (!prev.has(participantId)) return prev;
+        setActiveStreamers((prev) => {
           const next = new Map(prev);
           next.delete(participantId);
           return next;
         });
-        if (remoteStreams.size <= 1) {
-          setStreamingIdentity(null);
+        if (participantId === selectedStreamParticipantIdRef.current) {
+          void livekitService.unsubscribeFromParticipant(participantId);
+          setSelectedStreamParticipantId(null);
+          setWatchModalOpen(false);
+          setIsStreamLoading(false);
         }
       } else {
+        setActiveStreamers(new Map());
+        void livekitService.unsubscribeAll();
         setRemoteStreams(new Map());
         setStreamingIdentity(null);
         setWatchModalOpen(false);
@@ -295,7 +342,7 @@ export const App: React.FC = () => {
         livekitService.setSessionToken(sessionToken);
         try {
           sessionStorage.setItem('tellas_session_token', sessionToken);
-        } catch (_) {}
+        } catch (_) { }
       }
     });
 
@@ -318,7 +365,7 @@ export const App: React.FC = () => {
       socket.off('role-updated');
       socket.off('host-transferred');
     };
-  }, [roomId, isHost, getEffectiveIdentity, myParticipantId]);
+  }, [roomId, isHost, getEffectiveIdentity, myParticipantId, resolveDisplayName]);
 
   // ─── Connect As Viewer Helper ───────────────────────────────────────
 
@@ -415,7 +462,7 @@ export const App: React.FC = () => {
       sessionStorage.removeItem('tellas_session_token');
       sessionStorage.removeItem('tellas_session_room');
       sessionStorage.removeItem('tellas_participant_id');
-    } catch (_) {}
+    } catch (_) { }
 
     socket.emit('create-room', { identity }, (res: any) => {
       if (res.success) {
@@ -425,7 +472,7 @@ export const App: React.FC = () => {
             sessionStorage.setItem('tellas_session_token', res.sessionToken);
             sessionStorage.setItem('tellas_session_room', res.roomId);
             sessionStorage.setItem('tellas_participant_id', res.participantId || '');
-          } catch (_) {}
+          } catch (_) { }
         }
         setMyParticipantId(res.participantId || '');
         setRoomId(res.roomId);
@@ -433,6 +480,7 @@ export const App: React.FC = () => {
         setIsHost(true);
         setIsRoomLocked(false);
         setMembers(res.members || [{ socketId: socket.id, participantId: res.participantId, identity, isHost: true }]);
+        setActiveStreamers(new Map());
         connectAsViewer(res.roomId, identity);
       } else {
         alert(res.error || 'Erro ao criar sala');
@@ -457,7 +505,7 @@ export const App: React.FC = () => {
             sessionStorage.setItem('tellas_session_token', res.sessionToken);
             sessionStorage.setItem('tellas_session_room', res.roomId);
             sessionStorage.setItem('tellas_participant_id', res.participantId || '');
-          } catch (_) {}
+          } catch (_) { }
         }
         setMyParticipantId(res.participantId || '');
         setRoomId(res.roomId);
@@ -465,6 +513,11 @@ export const App: React.FC = () => {
         setIsHost(res.isHost);
         setIsRoomLocked(res.isLocked || false);
         setMembers(res.members || [{ socketId: socket.id, participantId: res.participantId, identity, isHost: res.isHost }]);
+        const joinedMembers: Member[] = res.members || [];
+        setActiveStreamers(new Map((res.activeStreamers || []).map((participantId: string) => {
+          const member = joinedMembers.find((item) => item.participantId === participantId);
+          return [participantId, { participantId, displayName: member?.identity || 'Participante' }];
+        })));
         connectAsViewer(res.roomId, identity);
       } else {
         alert(res.error || 'Erro ao entrar na sala');
@@ -481,7 +534,7 @@ export const App: React.FC = () => {
       sessionStorage.removeItem('tellas_session_token');
       sessionStorage.removeItem('tellas_session_room');
       sessionStorage.removeItem('tellas_participant_id');
-    } catch (_) {}
+    } catch (_) { }
     setMyParticipantId('');
     setIsInRoom(false);
     setIsHost(false);
@@ -489,6 +542,10 @@ export const App: React.FC = () => {
     setRoomId('');
     setMembers([]);
     setRemoteStreams(new Map());
+    setActiveStreamers(new Map());
+    setSelectedStreamParticipantId(null);
+    setIsStreamLoading(false);
+    setStreamError(null);
     setConnectionState(null);
     setStreamingIdentity(null);
     setWatchModalOpen(false);
@@ -551,8 +608,10 @@ export const App: React.FC = () => {
 
       const tokenResponse = await livekitService.requestToken({ roomId, identity, role: 'publisher' });
 
+      const watchTarget = selectedStreamParticipantIdRef.current;
       if (livekitService.connected) await livekitService.disconnect();
       await livekitService.connect(tokenResponse);
+      if (watchTarget) await livekitService.subscribeToParticipant(watchTarget);
 
       livekitService.setQualityPreset(qualityPreset);
       await livekitService.publishStream(finalStream);
@@ -646,10 +705,10 @@ export const App: React.FC = () => {
       video: videoConstraints,
       audio: shouldRequestAudio
         ? {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-          }
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        }
         : false,
       systemAudio: isFullScreen ? 'exclude' : 'include',
     };
@@ -679,8 +738,8 @@ export const App: React.FC = () => {
       const sourceName = actualSurface === 'browser'
         ? 'Guia do Navegador'
         : actualSurface === 'window'
-        ? 'Janela'
-        : 'Tela Inteira';
+          ? 'Janela'
+          : 'Tela Inteira';
 
       setSelectedSource({ id: `web:${actualSurface}`, name: sourceName, thumbnail: '' });
       setIsModalOpen(false);
@@ -712,12 +771,29 @@ export const App: React.FC = () => {
     livekitService.setQualityPreset(presetKey);
   };
 
+  const handleWatchStream = useCallback(async (participantId: string) => {
+    setSelectedStreamParticipantId(participantId);
+    setWatchModalOpen(true);
+    setIsStreamLoading(true);
+    setStreamError(null);
+    await livekitService.subscribeToParticipant(participantId);
+  }, []);
+
+  const handleStopWatch = useCallback(async () => {
+    const target = selectedStreamParticipantIdRef.current;
+    if (target) await livekitService.unsubscribeFromParticipant(target);
+    setSelectedStreamParticipantId(null);
+    setWatchModalOpen(false);
+    setIsStreamLoading(false);
+    setStreamError(null);
+  }, []);
+
   const currentPreset = VIDEO_QUALITY_PRESETS[qualityPreset];
 
   // Active stream entry for watch modal (supports multiple concurrent streams)
   const activeStreamEntry = selectedStreamParticipantId && remoteStreams.has(selectedStreamParticipantId)
     ? [selectedStreamParticipantId, remoteStreams.get(selectedStreamParticipantId)!] as [string, RemoteStreamItem]
-    : hasAnyRemoteStream ? Array.from(remoteStreams.entries())[0] : null;
+    : null;
 
   return (
     <div className="flex flex-col h-screen bg-[#0B0D10] text-[#F4F6F8] select-none font-sans overflow-hidden">
@@ -772,7 +848,7 @@ export const App: React.FC = () => {
           /* ── Landing / Login Screen ─────────────────────────────────── */
           <div className="h-full flex items-center justify-center p-4">
             <div className="w-full max-w-sm bg-[#16191F] p-7 rounded-xl border border-[#252A34] shadow-card space-y-5">
-              
+
               {/* Header Icon & Title */}
               <div className="text-center space-y-2">
                 <div className="flex justify-center mb-1">
@@ -866,9 +942,8 @@ export const App: React.FC = () => {
                             e.stopPropagation();
                             setSelectedStreamParticipantId(pid);
                           }}
-                          className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium transition ${
-                            isSelected ? 'bg-[#5B7CFA] text-white' : 'text-[#9DA5B4] hover:text-white'
-                          }`}
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium transition ${isSelected ? 'bg-[#5B7CFA] text-white' : 'text-[#9DA5B4] hover:text-white'
+                            }`}
                         >
                           <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-[#F87171]'}`} />
                           {item.displayName}
@@ -885,8 +960,17 @@ export const App: React.FC = () => {
                 </div>
                 <p className="text-sm font-semibold text-[#EDEFF3]">Aguardando transmissão</p>
                 <p className="text-xs text-[#687180] mt-1 max-w-[280px]">
-                  A transmissão aparecerá automaticamente aqui assim que o streamer iniciar.
+                  {hasAnyActiveStreamer ? 'Escolha uma transmissão para assistir.' : 'Aguardando alguém iniciar uma transmissão.'}
                 </p>
+                {hasAnyActiveStreamer && (
+                  <div className="mt-3 flex flex-wrap justify-center gap-2">
+                    {Array.from(activeStreamers.values()).map((streamer) => (
+                      <button key={streamer.participantId} onClick={() => void handleWatchStream(streamer.participantId)} className="px-3 py-1.5 rounded-md bg-[#5B7CFA] text-white text-xs font-medium">
+                        Assistir {streamer.displayName}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <button
                   onClick={handleLeaveRoom}
                   className="mt-4 px-3.5 py-1.5 rounded-md bg-[#F87171]/15 hover:bg-[#F87171]/25 text-[#F87171] text-xs font-medium flex items-center gap-1.5 transition"
@@ -918,7 +1002,7 @@ export const App: React.FC = () => {
                   </div>
                   <p className="text-xs font-semibold text-[#EDEFF3]">Aguardando transmissão</p>
                   <p className="text-[11px] text-[#687180] mt-0.5 max-w-[240px]">
-                    A transmissão aparecerá automaticamente aqui assim que o streamer iniciar.
+                    {hasAnyActiveStreamer ? 'Toque em um participante ao vivo abaixo para assistir.' : 'Aguardando alguém iniciar uma transmissão.'}
                   </p>
                 </div>
               )}
@@ -934,11 +1018,10 @@ export const App: React.FC = () => {
                     <button
                       key={pid}
                       onClick={() => setSelectedStreamParticipantId(pid)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium shrink-0 transition ${
-                        isSelected
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium shrink-0 transition ${isSelected
                           ? 'bg-[#5B7CFA] text-white shadow-cta'
                           : 'bg-[#16191F] border border-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8]'
-                      }`}
+                        }`}
                     >
                       <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-[#F87171]'}`} />
                       {item.displayName}
@@ -959,11 +1042,10 @@ export const App: React.FC = () => {
                       <button
                         onClick={handleToggleRoomLock}
                         title={isRoomLocked ? 'Sala trancada (toque para abrir)' : 'Sala aberta (toque para trancar)'}
-                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${
-                          isRoomLocked
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${isRoomLocked
                             ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30 hover:bg-[#F87171]/25'
                             : 'bg-[#34D399]/15 text-[#34D399] border border-[#34D399]/30 hover:bg-[#34D399]/25'
-                        }`}
+                          }`}
                       >
                         {isRoomLocked ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
                         {isRoomLocked ? 'Trancada' : 'Aberta'}
@@ -1011,21 +1093,20 @@ export const App: React.FC = () => {
                   {members
                     .filter((m) => (myParticipantId && m.participantId ? m.participantId !== myParticipantId : m.socketId !== socket.id))
                     .map((member) => {
-                      const streamItem = member.participantId ? remoteStreams.get(member.participantId) : null;
-                      const isStreamingRemote = !!streamItem;
+                      const streamerItem = member.participantId ? activeStreamers.get(member.participantId) : null;
+                      const isStreamingRemote = !!streamerItem;
                       const isCurrentlyWatching = !!(member.participantId && activeStreamEntry?.[0] === member.participantId);
 
                       return (
                         <div
                           key={member.participantId || member.socketId}
                           onClick={() => {
-                            if (member.participantId && remoteStreams.has(member.participantId)) {
-                              setSelectedStreamParticipantId(member.participantId);
+                            if (member.participantId && activeStreamers.has(member.participantId)) {
+                              void handleWatchStream(member.participantId);
                             }
                           }}
-                          className={`flex items-center gap-2.5 px-3 py-2.5 transition ${
-                            streamItem ? 'cursor-pointer hover:bg-[#1D2129]' : ''
-                          }`}
+                          className={`flex items-center gap-2.5 px-3 py-2.5 transition ${streamerItem ? 'cursor-pointer hover:bg-[#1D2129]' : ''
+                            }`}
                         >
                           <div className="relative shrink-0">
                             <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-medium text-[#9DA5B4] uppercase">
@@ -1097,11 +1178,10 @@ export const App: React.FC = () => {
                       <button
                         onClick={handleToggleRoomLock}
                         title={isRoomLocked ? 'Sala trancada (clique para abrir)' : 'Sala aberta (clique para trancar)'}
-                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${
-                          isRoomLocked
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${isRoomLocked
                             ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30 hover:bg-[#F87171]/25'
                             : 'bg-[#34D399]/15 text-[#34D399] border border-[#34D399]/30 hover:bg-[#34D399]/25'
-                        }`}
+                          }`}
                       >
                         {isRoomLocked ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
                         {isRoomLocked ? 'Trancada' : 'Aberta'}
@@ -1122,7 +1202,7 @@ export const App: React.FC = () => {
               </div>
 
               {/* Active Streamers Cards (Multi-stream support) */}
-              {Array.from(remoteStreams.entries()).map(([participantId, item]) => (
+              {Array.from(activeStreamers.entries()).map(([participantId, item]) => (
                 <div key={participantId} className="mx-3 mt-2.5 p-2.5 rounded-lg bg-[#16191F] border border-[#252A34] shadow-subtle flex items-center justify-between">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="w-2 h-2 rounded-full bg-[#F87171] shrink-0" />
@@ -1135,10 +1215,7 @@ export const App: React.FC = () => {
                   </div>
 
                   <button
-                    onClick={() => {
-                      setSelectedStreamParticipantId(participantId);
-                      setWatchModalOpen(true);
-                    }}
+                    onClick={() => void handleWatchStream(participantId)}
                     className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#5B7CFA]/12 hover:bg-[#5B7CFA]/18 border border-[#5B7CFA]/20 text-[#8FA5FF] text-[11px] font-medium transition"
                   >
                     <Play className="w-2.5 h-2.5 fill-current" />
@@ -1184,7 +1261,7 @@ export const App: React.FC = () => {
                 {members
                   .filter((m) => (myParticipantId && m.participantId ? m.participantId !== myParticipantId : m.socketId !== socket.id))
                   .map((member) => {
-                    const isStreamer = !!(member.participantId && remoteStreams.has(member.participantId));
+                    const isStreamer = !!(member.participantId && activeStreamers.has(member.participantId));
                     return (
                       <div
                         key={member.participantId || member.socketId}
@@ -1335,29 +1412,26 @@ export const App: React.FC = () => {
 
                     <div>
                       <h3 className="text-[17px] font-semibold text-[#EDEFF3]">
-                        {hasAnyRemoteStream
-                          ? remoteStreams.size === 1
-                            ? `${Array.from(remoteStreams.values())[0]?.displayName || 'Alguém'} está transmitindo`
-                            : `${remoteStreams.size} transmissões ao vivo disponíveis`
+                        {hasAnyActiveStreamer
+                          ? activeStreamers.size === 1
+                            ? `${Array.from(activeStreamers.values())[0]?.displayName || 'Alguém'} está transmitindo`
+                            : `${activeStreamers.size} transmissões ao vivo disponíveis`
                           : 'Nenhuma transmissão ativa'}
                       </h3>
                       <p className="text-xs text-[#737C8A] mt-1 max-w-[340px] leading-relaxed">
-                        {hasAnyRemoteStream
+                        {hasAnyActiveStreamer
                           ? 'Você pode assistir ou iniciar seu compartilhamento simultaneamente.'
                           : 'Compartilhe sua tela para começar.'}
                       </p>
                     </div>
 
                     <div className="flex flex-col items-center gap-2.5 mt-1">
-                      {hasAnyRemoteStream && (
+                      {hasAnyActiveStreamer && (
                         <div className="flex items-center gap-2 flex-wrap justify-center">
-                          {Array.from(remoteStreams.entries()).map(([participantId, item]) => (
+                          {Array.from(activeStreamers.entries()).map(([participantId, item]) => (
                             <button
                               key={participantId}
-                              onClick={() => {
-                                setSelectedStreamParticipantId(participantId);
-                                setWatchModalOpen(true);
-                              }}
+                              onClick={() => void handleWatchStream(participantId)}
                               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white font-medium text-xs shadow-cta transition transform hover:-translate-y-0.5"
                             >
                               <Play className="w-3.5 h-3.5 fill-white" />
@@ -1377,14 +1451,13 @@ export const App: React.FC = () => {
                         </button>
                         <button
                           onClick={() => setIsModalOpen(true)}
-                          className={`px-4 py-1.5 rounded-md font-medium text-xs flex items-center gap-1.5 transition ${
-                            hasAnyRemoteStream
+                          className={`px-4 py-1.5 rounded-md font-medium text-xs flex items-center gap-1.5 transition ${hasAnyActiveStreamer
                               ? 'bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] hover:border-[#5B7CFA] text-[#F4F6F8]'
                               : 'bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white shadow-cta'
-                          }`}
+                            }`}
                         >
                           <Monitor className="w-3.5 h-3.5" />
-                          {hasAnyRemoteStream ? 'Transmitir também' : 'Transmitir Tela'}
+                          {hasAnyActiveStreamer ? 'Transmitir também' : 'Transmitir Tela'}
                         </button>
                       </div>
                     </div>
@@ -1397,19 +1470,21 @@ export const App: React.FC = () => {
       </main>
 
       {/* ── Watch Modal (Theatre Mode) ─────────────────────────────────── */}
-      {watchModalOpen && activeStreamEntry && (
+      {watchModalOpen && selectedStreamParticipantId && (
         <div
           className="fixed inset-0 z-50 bg-black/75 backdrop-blur-[2px] flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150"
-          onClick={(e) => { if (e.target === e.currentTarget) setWatchModalOpen(false); }}
+          onClick={(e) => { if (e.target === e.currentTarget) void handleStopWatch(); }}
         >
           <div className="relative w-full max-w-[94vw] lg:max-w-6xl max-h-[90vh] aspect-video flex items-center justify-center animate-in zoom-in-95 duration-150">
             <StreamViewer
-              remoteStream={activeStreamEntry[1].stream}
-              peerId={activeStreamEntry[0]}
-              streamerName={activeStreamEntry[1].displayName}
+              remoteStream={activeStreamEntry?.[1].stream || null}
+              peerId={selectedStreamParticipantId}
+              streamerName={activeStreamers.get(selectedStreamParticipantId)?.displayName || activeStreamEntry?.[1].displayName}
               roomId={roomId}
               memberCount={members.length}
-              onClose={() => setWatchModalOpen(false)}
+              onClose={() => void handleStopWatch()}
+              isLoading={isStreamLoading}
+              errorMessage={streamError}
             />
           </div>
         </div>
@@ -1424,11 +1499,10 @@ export const App: React.FC = () => {
           <div className="relative w-full max-w-sm rounded-xl bg-[#16191F] border border-[#252A34] shadow-2xl p-5 space-y-4 animate-in zoom-in-95 duration-150">
             <div className="flex items-start gap-3.5">
               <div
-                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                  actionModal.type === 'kick'
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${actionModal.type === 'kick'
                     ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30'
                     : 'bg-[#FBBF24]/15 text-[#FBBF24] border border-[#FBBF24]/30'
-                }`}
+                  }`}
               >
                 {actionModal.type === 'kick' ? <UserX className="w-5 h-5" /> : <Crown className="w-5 h-5" />}
               </div>
@@ -1459,11 +1533,10 @@ export const App: React.FC = () => {
               </button>
               <button
                 onClick={handleConfirmModalAction}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold shadow-cta transition ${
-                  actionModal.type === 'kick'
+                className={`px-4 py-1.5 rounded-lg text-xs font-semibold shadow-cta transition ${actionModal.type === 'kick'
                     ? 'bg-[#F87171] hover:bg-[#EF4444] text-white'
                     : 'bg-[#FBBF24] hover:bg-[#F59E0B] text-[#101217]'
-                }`}
+                  }`}
               >
                 {actionModal.type === 'kick' ? 'Expulsar' : 'Transferir'}
               </button>

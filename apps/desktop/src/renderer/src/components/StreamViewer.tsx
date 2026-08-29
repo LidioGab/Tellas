@@ -9,12 +9,16 @@ interface StreamViewerProps {
   roomId?: string;
   memberCount?: number;
   onClose?: () => void;
+  isLoading?: boolean;
+  errorMessage?: string | null;
 }
 
 export const StreamViewer: React.FC<StreamViewerProps> = ({
   remoteStream,
   streamerName,
   onClose,
+  isLoading = false,
+  errorMessage = null,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoBoxRef = useRef<HTMLDivElement>(null);
@@ -95,7 +99,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
           setControlsVisible(true);
           if (videoRef.current) {
             videoRef.current.muted = true;
-            videoRef.current.play().catch(() => {});
+            videoRef.current.play().catch(() => { });
           }
         });
     }
@@ -118,7 +122,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
     if (videoRef.current) {
       videoRef.current.muted = false;
       videoRef.current.volume = volume > 0 ? volume : 1;
-      videoRef.current.play().catch(() => {});
+      videoRef.current.play().catch(() => { });
     }
     resetHideTimer();
   };
@@ -130,7 +134,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
       videoRef.current.muted = nextMuted;
       setIsMuted(nextMuted);
       setAutoplayBlocked(false);
-      if (!nextMuted) videoRef.current.play().catch(() => {});
+      if (!nextMuted) videoRef.current.play().catch(() => { });
     }
     resetHideTimer();
   };
@@ -144,7 +148,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
       videoRef.current.volume = val;
       videoRef.current.muted = val === 0;
       setIsMuted(val === 0);
-      if (val > 0) videoRef.current.play().catch(() => {});
+      if (val > 0) videoRef.current.play().catch(() => { });
     }
   };
 
@@ -197,11 +201,10 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
       onDoubleClick={!isTouchDevice ? toggleFullscreen : undefined}
       onClick={!isTouchDevice ? handleVideoTap : undefined}
       onTouchEnd={isTouchDevice ? handleVideoTap : undefined}
-      className={`relative w-full h-full bg-[#080A0D] flex items-center justify-center select-none overflow-hidden ${
-        isImmersive
+      className={`relative w-full h-full bg-[#080A0D] flex items-center justify-center select-none overflow-hidden ${isImmersive
           ? 'fixed inset-0 z-50 rounded-none w-screen h-screen bg-black'
           : 'rounded-[10px] border border-[#252A34] shadow-[0_20px_50px_rgba(0,0,0,0.40)]'
-      } ${!isOverlayActive && !isTouchDevice ? 'cursor-none' : 'cursor-default'}`}
+        } ${!isOverlayActive && !isTouchDevice ? 'cursor-none' : 'cursor-default'}`}
     >
       {remoteStream ? (
         <>
@@ -328,8 +331,9 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
       ) : (
         /* Discreet Loading / Waiting for Stream */
         <div className="flex flex-col items-center justify-center p-8 text-center">
-          <p className="text-xs font-medium text-[#737C8A]">
-            Carregando transmissão...
+          {isLoading && <span className="w-5 h-5 mb-3 rounded-full border-2 border-[#252A34] border-t-[#5B7CFA] animate-spin" />}
+          <p className={`text-xs font-medium ${errorMessage ? 'text-[#F87171]' : 'text-[#737C8A]'}`}>
+            {errorMessage || `Conectando à transmissão de ${streamerName || 'Participante'}...`}
           </p>
         </div>
       )}
