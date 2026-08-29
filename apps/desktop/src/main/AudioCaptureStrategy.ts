@@ -17,12 +17,20 @@ export function getWindowsDisplayVersion(build: number): 'Windows 10' | 'Windows
 }
 
 /**
- * Pure function: Select audio capture strategy based on actual hardware/OS capability,
- * NOT simply by marketing OS name.
+ * Pure function: Select audio capture strategy based on actual hardware/OS capability.
+ * - Windows 11 and Windows 10 build >= 20348 (Server 2022) -> PROCESS_LOOPBACK (Officially Supported)
+ * - Windows 10 build 19041..20347 (2004, 20H2, 21H1, 21H2, 22H2) -> PROCESS_LOOPBACK_PROBE (Probe Eligible)
+ * - Windows build < 19041 -> VIRTUAL_AUDIO_REQUIRED
  */
-export function selectAudioCaptureStrategy(processLoopbackSupported: boolean): AudioCaptureStrategy {
-  if (processLoopbackSupported) {
+export function selectAudioCaptureStrategy(
+  officialSupported: boolean,
+  probeEligible: boolean
+): AudioCaptureStrategy {
+  if (officialSupported) {
     return AudioCaptureStrategy.PROCESS_LOOPBACK;
+  }
+  if (probeEligible) {
+    return AudioCaptureStrategy.PROCESS_LOOPBACK_PROBE;
   }
   return AudioCaptureStrategy.VIRTUAL_AUDIO_REQUIRED;
 }
@@ -44,19 +52,31 @@ export function parseWindowsBuild(releaseStr = os.release()): number {
 /**
  * Centrally determine the complete Windows audio environment and capture strategy.
  */
-export function getWindowsAudioEnvironment(isNativeLoopbackSupported: boolean): WindowsAudioEnvironment {
+export function getWindowsAudioEnvironment(
+  isNativeOfficiallySupported: boolean,
+  isNativeProbeEligible: boolean
+): WindowsAudioEnvironment {
   const platform = process.platform;
   const release = os.release();
   const build = parseWindowsBuild(release);
   const windowsVersion = platform === 'win32' ? getWindowsDisplayVersion(build) : 'Unknown';
-  const processLoopbackSupported = isNativeLoopbackSupported;
-  const strategy = selectAudioCaptureStrategy(processLoopbackSupported);
+
+  const officialProcessLoopbackSupported = isNativeOfficiallySupported;
+  const processLoopbackProbeEligible = isNativeProbeEligible;
+  const processLoopbackSupported = officialProcessLoopbackSupported || processLoopbackProbeEligible;
+
+  const strategy = selectAudioCaptureStrategy(
+    officialProcessLoopbackSupported,
+    processLoopbackProbeEligible
+  );
 
   return {
     platform,
     release,
     build,
     windowsVersion,
+    officialProcessLoopbackSupported,
+    processLoopbackProbeEligible,
     processLoopbackSupported,
     strategy,
   };

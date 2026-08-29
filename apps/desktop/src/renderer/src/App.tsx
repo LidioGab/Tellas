@@ -2,6 +2,12 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { socket } from './services/socket';
 import { livekitService, type RemoteStreamInfo } from './services/livekitService';
 import { audioCaptureManager } from './audio/AudioCaptureManager';
+import {
+  getActualDisplaySurface,
+  resolveWebAudioPolicy,
+  sanitizeMediaStreamForPolicy,
+  RequestedWebMode
+} from './audio/webCapturePolicy';
 import { DesktopSource, VIDEO_QUALITY_PRESETS, WindowsAudioEnvironment, AudioCaptureStrategy } from '@stream-app/shared';
 import { ConnectionState } from 'livekit-client';
 import { SourcePickerModal } from './components/SourcePickerModal';
@@ -81,6 +87,7 @@ export const App: React.FC = () => {
   // Audio environment & strategy
   const [audioEnv, setAudioEnv] = useState<WindowsAudioEnvironment | null>(null);
   const [audioWarningMessage, setAudioWarningMessage] = useState<string | null>(null);
+  const [diagnosticLogPath, setDiagnosticLogPath] = useState<string | null>(null);
 
   // Stream state
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -505,9 +512,17 @@ export const App: React.FC = () => {
     if (window.electronAPI?.startAudioCapture) {
       try {
         const audioRes = await audioCaptureManager.start(48000);
+        if (audioRes.diagnosticLogPath) {
+          setDiagnosticLogPath(audioRes.diagnosticLogPath);
+        }
+
         if (!audioRes.success) {
           if (audioRes.code === 'VIRTUAL_AUDIO_REQUIRED') {
-            setAudioWarningMessage('O áudio do sistema não está disponível nesta versão do Windows. A transmissão continuará apenas com vídeo.');
+            setAudioWarningMessage('O áudio do sistema requer Windows 10 build 19041+ ou Windows 11. A transmissão continuará apenas com vídeo.');
+          } else if (audioRes.code === 'WASAPI_START_FAILED' || audioRes.code === 'PROCESS_LOOPBACK_UNAVAILABLE') {
+            setAudioWarningMessage('O Process Loopback não pôde ser ativado neste sistema. A transmissão continuará apenas com vídeo.');
+          } else if (audioRes.code === 'DISCORD_PROCESS_TREE_AMBIGUOUS') {
+            setAudioWarningMessage('Não foi possível isolar com segurança o áudio do Discord. A transmissão continuará sem áudio.');
           }
         } else {
           setAudioWarningMessage(null);
@@ -524,6 +539,16 @@ export const App: React.FC = () => {
     }
 
     try {
+      const audioTrack = finalStream.getAudioTracks()[0];
+      const videoTrack = finalStream.getVideoTracks()[0];
+
+      window.electronAPI?.sendAudioDiagnosticEvent?.('PUBLISH_STREAM_INIT', {
+        hasAudioTrack: Boolean(audioTrack),
+        audioTrackId: audioTrack?.id || 'NONE',
+        audioTrackState: audioTrack?.readyState || 'NONE',
+        videoTrackId: videoTrack?.id || 'NONE'
+      }, 'LIVEKIT');
+
       const tokenResponse = await livekitService.requestToken({ roomId, identity, role: 'publisher' });
 
       if (livekitService.connected) await livekitService.disconnect();
@@ -532,6 +557,12 @@ export const App: React.FC = () => {
       livekitService.setQualityPreset(qualityPreset);
       await livekitService.publishStream(finalStream);
 
+      window.electronAPI?.sendAudioDiagnosticEvent?.('PUBLISH_STREAM_SUCCESS', {
+        status: 'STREAM_PUBLISHED',
+        hasAudioTrack: Boolean(audioTrack),
+        finalAudioResult: audioTrack ? 'AUDIO_PUBLISHED' : 'VIDEO_ONLY'
+      }, 'LIVEKIT');
+
       setLocalStream(finalStream);
       setIsStreaming(true);
       setStreamingIdentity(identity);
@@ -539,6 +570,9 @@ export const App: React.FC = () => {
       socket.emit('start-stream', { roomId, identity });
     } catch (err: any) {
       console.error('[App] Failed to publish stream:', err);
+      window.electronAPI?.sendAudioDiagnosticEvent?.('PUBLISH_STREAM_ERROR', {
+        error: err.message
+      }, 'LIVEKIT');
       alert(`Erro ao iniciar transmissão: ${err.message}`);
       setIsStreaming(false);
       setLocalStream(null);
@@ -587,7 +621,75 @@ export const App: React.FC = () => {
       await startStreamingViaLiveKit(stream);
       stream.getVideoTracks()[0].onended = () => handleStopStream();
     } catch (err: any) {
-      console.error('[App] Failed to getDisplayMedia:', err);
+      if (err.name !== 'NotAllowedError') {
+        console.error('[App] Failed to getDisplayMedia:', err);
+      }
+    }
+  };
+
+  const handleStartWebCapture = async (targetSurface: RequestedWebMode) => {
+    const preset = VIDEO_QUALITY_PRESETS[qualityPreset] || VIDEO_QUALITY_PRESETS['1080p30'];
+    const isFullScreen = targetSurface === 'monitor';
+    const shouldRequestAudio = !isFullScreen;
+
+    const videoConstraints: any = {
+      width: { ideal: preset.width },
+      height: { ideal: preset.height },
+      frameRate: { ideal: preset.frameRate },
+    };
+
+    if (targetSurface) {
+      videoConstraints.displaySurface = targetSurface;
+    }
+
+    const displayMediaOptions: any = {
+      video: videoConstraints,
+      audio: shouldRequestAudio
+        ? {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          }
+        : false,
+      systemAudio: isFullScreen ? 'exclude' : 'include',
+    };
+
+    try {
+      const captureStream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+      const actualSurface = getActualDisplaySurface(captureStream);
+      const hasAudio = captureStream.getAudioTracks().length > 0;
+      const policyResult = resolveWebAudioPolicy(targetSurface, actualSurface, hasAudio);
+
+      // If selection is incompatible with requested mode (e.g. clicked Tab but picked Window/Screen)
+      if (policyResult.decision === 'REJECT_SELECTION') {
+        captureStream.getTracks().forEach((track) => track.stop());
+        setAudioWarningMessage(policyResult.errorMessage);
+        return;
+      }
+
+      // Sanitize stream: stops audio tracks if policy decision is FORCE_VIDEO_ONLY
+      const finalStream = sanitizeMediaStreamForPolicy(captureStream, policyResult.decision);
+
+      if (policyResult.warningMessage) {
+        setAudioWarningMessage(policyResult.warningMessage);
+      } else {
+        setAudioWarningMessage(null);
+      }
+
+      const sourceName = actualSurface === 'browser'
+        ? 'Guia do Navegador'
+        : actualSurface === 'window'
+        ? 'Janela'
+        : 'Tela Inteira';
+
+      setSelectedSource({ id: `web:${actualSurface}`, name: sourceName, thumbnail: '' });
+      setIsModalOpen(false);
+      await startStreamingViaLiveKit(finalStream);
+      finalStream.getVideoTracks()[0].onended = () => handleStopStream();
+    } catch (err: any) {
+      if (err.name !== 'NotAllowedError') {
+        console.error('[App] Failed to getDisplayMedia on Web:', err);
+      }
     }
   };
 
@@ -1186,12 +1288,27 @@ export const App: React.FC = () => {
             <div className="flex-1 flex flex-col overflow-hidden bg-[#0B0D10]">
               {/* Audio warning banner */}
               {audioWarningMessage && (
-                <div className="mx-4 mt-3 flex items-center gap-2.5 bg-[#FBBF24]/10 border border-[#FBBF24]/20 rounded-lg px-3.5 py-2 text-xs text-[#FBBF24]">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span className="flex-1">{audioWarningMessage}</span>
-                  <button onClick={() => setAudioWarningMessage(null)} className="text-[#FBBF24]/60 hover:text-[#FBBF24]">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                <div className="mx-4 mt-3 flex flex-col gap-1.5 bg-[#FBBF24]/10 border border-[#FBBF24]/20 rounded-lg px-3.5 py-2 text-xs text-[#FBBF24]">
+                  <div className="flex items-center gap-2.5">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span className="flex-1">{audioWarningMessage}</span>
+                    <button onClick={() => setAudioWarningMessage(null)} className="text-[#FBBF24]/60 hover:text-[#FBBF24]">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  {diagnosticLogPath && (
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#FBBF24]/15 text-[11px] text-[#EDEFF3]/80">
+                      <span className="truncate">Diagnóstico: <code className="text-[#FBBF24]">{diagnosticLogPath.split(/[\/\\]/).pop()}</code></span>
+                      {window.electronAPI?.openAudioDiagnosticFolder && (
+                        <button
+                          onClick={() => window.electronAPI.openAudioDiagnosticFolder()}
+                          className="shrink-0 px-2 py-0.5 rounded bg-[#16191F] border border-[#252A34] hover:bg-[#1D2129] text-[#EDEFF3] transition text-[10px]"
+                        >
+                          Abrir Pasta de Logs
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1361,6 +1478,7 @@ export const App: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         onSelectSource={handleStartCapture}
         onSelectNativeDisplayMedia={handleStartNativeCapture}
+        onSelectWebSurface={handleStartWebCapture}
       />
     </div>
   );

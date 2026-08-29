@@ -141,6 +141,7 @@ export interface SignalingEvents {
 
 export enum AudioCaptureStrategy {
   PROCESS_LOOPBACK = 'PROCESS_LOOPBACK',
+  PROCESS_LOOPBACK_PROBE = 'PROCESS_LOOPBACK_PROBE',
   VIRTUAL_AUDIO_REQUIRED = 'VIRTUAL_AUDIO_REQUIRED',
 }
 
@@ -149,6 +150,8 @@ export interface WindowsAudioEnvironment {
   release: string;
   build: number;
   windowsVersion: 'Windows 10' | 'Windows 11' | 'Unknown';
+  officialProcessLoopbackSupported: boolean;
+  processLoopbackProbeEligible: boolean;
   processLoopbackSupported: boolean;
   strategy: AudioCaptureStrategy;
 }

@@ -19,6 +19,10 @@ public:
             InstanceMethod("start", &NativeAudioAddon::Start),
             InstanceMethod("stop", &NativeAudioAddon::Stop),
             InstanceMethod("isCapturing", &NativeAudioAddon::IsCapturing),
+            InstanceMethod("setDiagnosticCallback", &NativeAudioAddon::SetDiagnosticCallback),
+            StaticMethod("isOfficiallySupported", &NativeAudioAddon::IsOfficiallySupported),
+            StaticMethod("isProbeEligible", &NativeAudioAddon::IsProbeEligible),
+            StaticMethod("canAttemptProcessLoopback", &NativeAudioAddon::CanAttemptProcessLoopback),
             StaticMethod("isSupported", &NativeAudioAddon::IsSupported)
         });
 
@@ -46,9 +50,28 @@ public:
             m_tsfn.Release();
             m_tsfn = nullptr;
         }
+        if (m_diagTsfn) {
+            m_diagTsfn.Release();
+            m_diagTsfn = nullptr;
+        }
     }
 
 private:
+    static Napi::Value IsOfficiallySupported(const Napi::CallbackInfo& info) {
+        Napi::Env env = info.Env();
+        return Napi::Boolean::New(env, ProcessLoopbackCapture::IsOfficiallySupported());
+    }
+
+    static Napi::Value IsProbeEligible(const Napi::CallbackInfo& info) {
+        Napi::Env env = info.Env();
+        return Napi::Boolean::New(env, ProcessLoopbackCapture::IsProbeEligible());
+    }
+
+    static Napi::Value CanAttemptProcessLoopback(const Napi::CallbackInfo& info) {
+        Napi::Env env = info.Env();
+        return Napi::Boolean::New(env, ProcessLoopbackCapture::CanAttemptProcessLoopback());
+    }
+
     static Napi::Value IsSupported(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         return Napi::Boolean::New(env, ProcessLoopbackCapture::IsSupported());
@@ -200,6 +223,39 @@ private:
         return Napi::Boolean::New(env, success);
     }
 
+    Napi::Value SetDiagnosticCallback(const Napi::CallbackInfo& info) {
+        Napi::Env env = info.Env();
+        if (info.Length() < 1 || !info[0].IsFunction()) {
+            return env.Undefined();
+        }
+
+        Napi::Function cb = info[0].As<Napi::Function>();
+        if (m_diagTsfn) {
+            m_diagTsfn.Release();
+            m_diagTsfn = nullptr;
+        }
+
+        m_diagTsfn = Napi::ThreadSafeFunction::New(
+            env,
+            cb,
+            "NativeAudioDiagnosticCallback",
+            0,
+            1
+        );
+
+        if (m_capture) {
+            m_capture->SetDiagnosticCallback([this](const std::string& category, const std::string& message) {
+                if (!this->m_diagTsfn) return;
+                this->m_diagTsfn.NonBlockingCall([category, message](Napi::Env env, Napi::Function jsCallback) {
+                    if (env == nullptr || jsCallback.IsEmpty()) return;
+                    jsCallback.Call({ Napi::String::New(env, category), Napi::String::New(env, message) });
+                });
+            });
+        }
+
+        return env.Undefined();
+    }
+
     Napi::Value Stop(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         if (m_capture) {
@@ -210,6 +266,7 @@ private:
 
     std::unique_ptr<ProcessLoopbackCapture> m_capture;
     Napi::ThreadSafeFunction m_tsfn;
+    Napi::ThreadSafeFunction m_diagTsfn;
 };
 
 Napi::Object InitAll(Napi::Env env, Napi::Object exports) {

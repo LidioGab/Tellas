@@ -16,10 +16,32 @@ class PcmStreamProcessor extends AudioWorkletProcessor {
     super();
     this._buffer = [];
     this._totalSamples = 0;
+    this._firstInputReported = false;
+    this._firstOutputReported = false;
+    this._underflows = 0;
+    this._framesProcessed = 0;
+
+    this.port.postMessage({
+      type: 'diagnostic',
+      category: 'WORKLET_INIT',
+      data: { workletStarted: true }
+    });
+
     // Listen for PCM data messages from the main thread
     this.port.onmessage = (event) => {
       const { data } = event;
       if (data.type === 'pcm') {
+        if (!this._firstInputReported) {
+          this._firstInputReported = true;
+          this.port.postMessage({
+            type: 'diagnostic',
+            category: 'WORKLET_FIRST_INPUT',
+            data: {
+              firstInput: true,
+              samples: data.samples ? data.samples.length : 0
+            }
+          });
+        }
         // data.samples is a Float32Array (stereo interleaved)
         this._buffer.push(data.samples);
         this._totalSamples += data.samples.length;
@@ -39,10 +61,25 @@ class PcmStreamProcessor extends AudioWorkletProcessor {
 
     if (this._totalSamples < needed) {
       // Not enough data yet — output silence
+      this._underflows++;
       leftChannel.fill(0);
       if (rightChannel) rightChannel.fill(0);
       return true;
     }
+
+    if (!this._firstOutputReported) {
+      this._firstOutputReported = true;
+      this.port.postMessage({
+        type: 'diagnostic',
+        category: 'WORKLET_FIRST_OUTPUT',
+        data: {
+          firstOutput: true,
+          frameSize: frameSize
+        }
+      });
+    }
+
+    this._framesProcessed++;
 
     // Pull samples from our queue
     const combined = new Float32Array(needed);

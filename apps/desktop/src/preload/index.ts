@@ -43,6 +43,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Returns a cleanup function to remove the listener.
    */
   onAudioBuffer: (callback: (buffer: Float32Array) => void): (() => void) => {
+    ipcRenderer.send('audio-diagnostic-event', {
+      layer: 'PRELOAD',
+      category: 'LISTENER',
+      data: { onAudioBufferRegistered: true }
+    });
+
     const handler = (_event: Electron.IpcRendererEvent, buffer: Float32Array) => {
       callback(buffer);
     };
@@ -60,5 +66,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
     ipcRenderer.on('audio-capture-error', handler);
     return () => ipcRenderer.removeListener('audio-capture-error', handler);
+  },
+
+  /** Send diagnostic event to main process logger */
+  sendAudioDiagnosticEvent: (category: string, data: any, layer = 'RENDERER'): void => {
+    ipcRenderer.send('audio-diagnostic-event', { layer, category, data });
+  },
+
+  /** Get path of current/latest audio diagnostic file */
+  getAudioDiagnosticPath: (): Promise<{ path: string | null; dir: string }> => {
+    return ipcRenderer.invoke('get-audio-diagnostic-path');
+  },
+
+  /** Open folder containing audio diagnostic files */
+  openAudioDiagnosticFolder: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('open-audio-diagnostic-folder');
   }
 });

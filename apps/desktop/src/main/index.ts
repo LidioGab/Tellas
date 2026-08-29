@@ -84,10 +84,21 @@ ipcMain.handle('get-sources', async () => {
   }
 });
 
+import { win10AudioLogger } from './Win10AudioDiagnosticLogger';
+
 // ─── Phase 2: Audio Capture with Discord Isolation IPC Handlers ─────────────
+
+let firstIpcSentLogged = false;
 
 // Setup forwarder from Discord Audio Isolation Service to Renderer
 discordAudioIsolationService.on('data', (buffer: Float32Array) => {
+  if (!firstIpcSentLogged) {
+    firstIpcSentLogged = true;
+    win10AudioLogger.logImmediate('MAIN', 'IPC', {
+      audioBufferIpcSent: true,
+      samples: buffer.length
+    });
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('audio-buffer', buffer);
   }
@@ -95,6 +106,7 @@ discordAudioIsolationService.on('data', (buffer: Float32Array) => {
 
 discordAudioIsolationService.on('error', (err: Error) => {
   console.error('[Main] Audio isolation capture error:', err.message);
+  win10AudioLogger.logImmediate('MAIN', 'CAPTURE_ERROR', { error: err.message });
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('audio-capture-error', err.message);
   }
@@ -119,6 +131,7 @@ ipcMain.handle('list-audio-devices', async () => {
 /** Start audio capture with Discord isolation and automatic fallback */
 ipcMain.handle('start-audio-capture', async (_event, deviceName?: string) => {
   try {
+    firstIpcSentLogged = false;
     const result = await discordAudioIsolationService.start(deviceName);
     if (!result.success) {
       return {
@@ -127,14 +140,16 @@ ipcMain.handle('start-audio-capture', async (_event, deviceName?: string) => {
         strategy: result.strategy,
         windowsVersion: result.windowsVersion,
         build: result.build,
-        error: result.error
+        error: result.error,
+        diagnosticLogPath: result.diagnosticLogPath
       };
     }
     console.log('[Main] Audio capture active:', result);
     return {
       success: true,
       format: discordAudioIsolationService.audioFormat,
-      isolation: result
+      isolation: result,
+      diagnosticLogPath: result.diagnosticLogPath
     };
   } catch (err: any) {
     console.error('[Main] start-audio-capture error:', err);
@@ -151,6 +166,26 @@ ipcMain.handle('stop-audio-capture', async () => {
     console.error('[Main] stop-audio-capture error:', err);
     return { success: false, error: err.message };
   }
+});
+
+/** Renderer Audio Diagnostic Event Receiver */
+ipcMain.on('audio-diagnostic-event', (_event, payload: { layer?: any; category: string; data: any }) => {
+  win10AudioLogger.log(payload.layer || 'RENDERER', payload.category, payload.data);
+});
+
+/** Get current audio diagnostic log path */
+ipcMain.handle('get-audio-diagnostic-path', async () => {
+  return {
+    path: win10AudioLogger.getCurrentLogFilePath(),
+    dir: win10AudioLogger.getLogDirectory()
+  };
+});
+
+/** Open audio diagnostic folder in file explorer */
+ipcMain.handle('open-audio-diagnostic-folder', async () => {
+  return {
+    success: win10AudioLogger.openLogFolder()
+  };
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

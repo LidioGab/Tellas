@@ -71,6 +71,48 @@ class ProcessLoopbackCaptureWrapper {
     }
   }
 
+  static isOfficiallySupported() {
+    if (!nativeBinding || !nativeBinding.ProcessLoopbackCapture) {
+      return false;
+    }
+    try {
+      if (typeof nativeBinding.ProcessLoopbackCapture.isOfficiallySupported === 'function') {
+        return nativeBinding.ProcessLoopbackCapture.isOfficiallySupported();
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static isProbeEligible() {
+    if (!nativeBinding || !nativeBinding.ProcessLoopbackCapture) {
+      return false;
+    }
+    try {
+      if (typeof nativeBinding.ProcessLoopbackCapture.isProbeEligible === 'function') {
+        return nativeBinding.ProcessLoopbackCapture.isProbeEligible();
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static canAttemptProcessLoopback() {
+    if (!nativeBinding || !nativeBinding.ProcessLoopbackCapture) {
+      return false;
+    }
+    try {
+      if (typeof nativeBinding.ProcessLoopbackCapture.canAttemptProcessLoopback === 'function') {
+        return nativeBinding.ProcessLoopbackCapture.canAttemptProcessLoopback();
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static isSupported() {
     if (!nativeBinding || !nativeBinding.ProcessLoopbackCapture) {
       return false;
@@ -92,6 +134,12 @@ class ProcessLoopbackCaptureWrapper {
   stop() {
     if (this._instance) {
       this._instance.stop();
+    }
+  }
+
+  setDiagnosticCallback(callback) {
+    if (this._instance && typeof this._instance.setDiagnosticCallback === 'function') {
+      this._instance.setDiagnosticCallback(callback);
     }
   }
 
