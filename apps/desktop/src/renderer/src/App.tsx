@@ -1,6 +1,10 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { socket } from './services/socket';
-import { cloudflareRealtimeService, type RemoteStreamInfo } from './services/cloudflareRealtimeService';
+import {
+  cloudflareRealtimeService,
+  isRoomNotFoundError,
+  type RemoteStreamInfo,
+} from './services/cloudflareRealtimeService';
 import { audioCaptureManager } from './audio/AudioCaptureManager';
 import {
   getActualDisplaySurface,
@@ -74,9 +78,11 @@ export const App: React.FC = () => {
   const [userName, setUserName] = useState<string>(() => {
     return localStorage.getItem('stream_username') || generateRandomName();
   });
-  const [roomId, setRoomId] = useState<string>('');
+  const [roomId, setRoomId] = useState<string>(() => sessionStorage.getItem('tellas_session_room') || '');
   const [inputRoomId, setInputRoomId] = useState<string>('');
-  const [isInRoom, setIsInRoom] = useState<boolean>(false);
+  const [isInRoom, setIsInRoom] = useState<boolean>(() => Boolean(
+    sessionStorage.getItem('tellas_session_room') && sessionStorage.getItem('tellas_session_token')
+  ));
   const [isHost, setIsHost] = useState<boolean>(false);
   const [isRoomLocked, setIsRoomLocked] = useState<boolean>(false);
   const [actionModal, setActionModal] = useState<ActionModalState | null>(null);
@@ -130,6 +136,9 @@ export const App: React.FC = () => {
   const hasAnyRemoteStream = remoteStreams.size > 0;
   const hasAnyActiveStreamer = activeStreamers.size > 0;
   const selectedStreamParticipantIdRef = useRef<string | null>(null);
+  const roomMembershipReadyRef = useRef(false);
+  const roomRecoveryPromiseRef = useRef<Promise<void> | null>(null);
+  const roomLossHandledRef = useRef(false);
 
   useEffect(() => {
     selectedStreamParticipantIdRef.current = selectedStreamParticipantId;
@@ -160,6 +169,133 @@ export const App: React.FC = () => {
     },
     [members]
   );
+
+  const resetLostRoom = useCallback(async (message: string) => {
+    if (roomLossHandledRef.current) return;
+    roomLossHandledRef.current = true;
+    roomMembershipReadyRef.current = false;
+    audioCaptureManager.stop();
+    localStream?.getTracks().forEach((track) => track.stop());
+    await cloudflareRealtimeService.disconnect();
+    cloudflareRealtimeService.setSessionToken(null);
+    cloudflareRealtimeService.setDiagnosticContext(null, null);
+    try {
+      sessionStorage.removeItem('tellas_session_token');
+      sessionStorage.removeItem('tellas_session_room');
+      sessionStorage.removeItem('tellas_participant_id');
+    } catch (_) { }
+    setMyParticipantId('');
+    setIsInRoom(false);
+    setIsHost(false);
+    setIsRoomLocked(false);
+    setRoomId('');
+    setMembers([]);
+    setLocalStream(null);
+    setRemoteStreams(new Map());
+    setActiveStreamers(new Map());
+    setSelectedStreamParticipantId(null);
+    setSelectedSource(null);
+    setIsStreamLoading(false);
+    setStreamError(null);
+    setIsStreaming(false);
+    setStreamingIdentity(null);
+    setWatchModalOpen(false);
+    alert(message);
+  }, [localStream]);
+
+  const recoverRoomMembership = useCallback((): Promise<void> => {
+    if (!isInRoom || !roomId) return Promise.resolve();
+    if (roomRecoveryPromiseRef.current) return roomRecoveryPromiseRef.current;
+
+    const savedRoom = sessionStorage.getItem('tellas_session_room');
+    const savedToken = sessionStorage.getItem('tellas_session_token');
+    if (!savedToken || savedRoom !== roomId) {
+      return resetLostRoom('Sua sessão da sala não está mais disponível. Entre novamente.');
+    }
+
+    roomMembershipReadyRef.current = false;
+    const recovery = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timeout = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('Tempo limite ao recuperar a sala.'));
+      }, 10_000);
+      socket.emit('join-room', {
+        roomId,
+        identity: getEffectiveIdentity(),
+        sessionToken: savedToken,
+      }, (res: any) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        if (!res?.success) {
+          reject(Object.assign(new Error(res?.error || 'Não foi possível recuperar a sala.'), { code: res?.code }));
+          return;
+        }
+
+        cloudflareRealtimeService.setSessionToken(res.sessionToken || savedToken);
+        cloudflareRealtimeService.setDiagnosticContext(res.roomId, res.participantId);
+        setMyParticipantId(res.participantId || '');
+        setRoomId(res.roomId);
+        setIsInRoom(true);
+        setIsHost(Boolean(res.isHost));
+        setIsRoomLocked(Boolean(res.isLocked));
+        const recoveredMembers: Member[] = res.members || [];
+        setMembers(recoveredMembers);
+        setActiveStreamers(new Map((res.activeStreamers || []).map((participantId: string) => {
+          const member = recoveredMembers.find((item) => item.participantId === participantId);
+          return [participantId, { participantId, displayName: member?.identity || 'Participante' }];
+        })));
+        roomLossHandledRef.current = false;
+        roomMembershipReadyRef.current = true;
+        resolve();
+      });
+    }).catch(async (error: Error & { code?: string }) => {
+      if (error.code === 'ROOM_NOT_FOUND') {
+        await resetLostRoom('A sala foi encerrada no servidor. Crie ou entre em uma nova sala.');
+      }
+      throw error;
+    });
+
+    roomRecoveryPromiseRef.current = recovery.finally(() => {
+      roomRecoveryPromiseRef.current = null;
+    });
+    return roomRecoveryPromiseRef.current;
+  }, [getEffectiveIdentity, isInRoom, resetLostRoom, roomId]);
+
+  const ensureRoomMembershipReady = useCallback(async (): Promise<void> => {
+    if (!isInRoom || !roomId) throw new Error('Entre em uma sala antes de usar mídia.');
+    if (roomMembershipReadyRef.current && socket.connected) return;
+    if (!socket.connected) throw new Error('Reconectando à sala. Aguarde alguns segundos.');
+    await recoverRoomMembership();
+    if (!roomMembershipReadyRef.current) throw new Error('A sala ainda não foi recuperada.');
+  }, [isInRoom, recoverRoomMembership, roomId]);
+
+  useEffect(() => {
+    const savedToken = sessionStorage.getItem('tellas_session_token');
+    if (savedToken) cloudflareRealtimeService.setSessionToken(savedToken);
+
+    const handleConnect = () => {
+      if (!isInRoom || !roomId) return;
+      void recoverRoomMembership().catch((error) => {
+        if ((error as { code?: string })?.code !== 'ROOM_NOT_FOUND') {
+          console.error('[App] Failed to recover room membership:', error);
+        }
+      });
+    };
+    const handleDisconnect = () => {
+      if (isInRoom && roomId) roomMembershipReadyRef.current = false;
+    };
+
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+    if (socket.connected) handleConnect();
+    return () => {
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+    };
+  }, [isInRoom, recoverRoomMembership, roomId]);
 
   useEffect(() => {
     cloudflareRealtimeService.setDiagnosticContext(roomId, myParticipantId);
@@ -451,6 +587,8 @@ export const App: React.FC = () => {
 
     socket.emit('create-room', { identity }, (res: any) => {
       if (res.success) {
+        roomMembershipReadyRef.current = true;
+        roomLossHandledRef.current = false;
         if (res.sessionToken) {
           cloudflareRealtimeService.setSessionToken(res.sessionToken);
           cloudflareRealtimeService.setDiagnosticContext(res.roomId, res.participantId);
@@ -484,6 +622,8 @@ export const App: React.FC = () => {
 
     socket.emit('join-room', { roomId: cleanRoomId, identity, sessionToken: savedToken }, (res: any) => {
       if (res.success) {
+        roomMembershipReadyRef.current = true;
+        roomLossHandledRef.current = false;
         if (res.sessionToken) {
           cloudflareRealtimeService.setSessionToken(res.sessionToken);
           cloudflareRealtimeService.setDiagnosticContext(res.roomId, res.participantId);
@@ -511,6 +651,7 @@ export const App: React.FC = () => {
   }, [inputRoomId, getEffectiveIdentity]);
 
   const handleLeaveRoom = useCallback(async () => {
+    roomMembershipReadyRef.current = false;
     await handleStopStream();
     await cloudflareRealtimeService.disconnect();
     if (roomId) socket.emit('leave-room', { roomId });
@@ -548,6 +689,16 @@ export const App: React.FC = () => {
   // ─── Streaming Actions ───────────────────────────────────────
 
   const startStreamingViaCloudflare = async (videoStream: MediaStream) => {
+    try {
+      await ensureRoomMembershipReady();
+    } catch (error) {
+      videoStream.getTracks().forEach((track) => track.stop());
+      if (!isRoomNotFoundError(error)) {
+        const message = error instanceof Error ? error.message : 'Não foi possível recuperar a sala.';
+        alert(message);
+      }
+      throw error;
+    }
     let finalStream = videoStream;
     const identity = getEffectiveIdentity();
 
@@ -609,7 +760,11 @@ export const App: React.FC = () => {
       window.electronAPI?.sendAudioDiagnosticEvent?.('PUBLISH_STREAM_ERROR', {
         error: err.message
       }, 'CLOUDFLARE');
-      alert(`Erro ao iniciar transmissão: ${err.message}`);
+      if (isRoomNotFoundError(err)) {
+        await resetLostRoom('A sala foi encerrada no servidor. Crie ou entre em uma nova sala.');
+      } else {
+        alert(`Erro ao iniciar transmissão: ${err.message}`);
+      }
       setIsStreaming(false);
       setLocalStream(null);
       if (finalStream) finalStream.getTracks().forEach((t) => t.stop());
@@ -759,8 +914,19 @@ export const App: React.FC = () => {
     setWatchModalOpen(true);
     setIsStreamLoading(true);
     setStreamError(null);
-    await cloudflareRealtimeService.subscribeToParticipant(participantId);
-  }, []);
+    try {
+      await ensureRoomMembershipReady();
+      await cloudflareRealtimeService.subscribeToParticipant(participantId);
+    } catch (error) {
+      if (isRoomNotFoundError(error)) {
+        await resetLostRoom('A sala foi encerrada no servidor. Crie ou entre em uma nova sala.');
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Não foi possível conectar à transmissão.';
+      setIsStreamLoading(false);
+      setStreamError(message);
+    }
+  }, [ensureRoomMembershipReady, resetLostRoom]);
 
   const handleStopWatch = useCallback(async () => {
     const target = selectedStreamParticipantIdRef.current;

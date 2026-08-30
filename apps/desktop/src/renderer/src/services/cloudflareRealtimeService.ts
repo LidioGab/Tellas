@@ -23,11 +23,16 @@ interface ApiErrorPayload {
   error?: string;
   code?: string;
 }
-class RealtimeApiError extends Error {
+export class RealtimeApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) {
     super(message);
     this.name = 'RealtimeApiError';
   }
+}
+
+export function isRoomNotFoundError(error: unknown): boolean {
+  return (error instanceof RealtimeApiError && error.code === 'ROOM_NOT_FOUND')
+    || (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ROOM_NOT_FOUND');
 }
 const DEV = import.meta.env.DEV;
 type CleanupReason = 'viewer-close' | 'switch-target' | 'stream-stopped' | 'user-left' | 'timeout' | 'reconnect' | 'cleanup' | 'other';
