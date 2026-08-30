@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { socket } from './services/socket';
-import { livekitService, type RemoteStreamInfo } from './services/livekitService';
+import { cloudflareRealtimeService, type RemoteStreamInfo } from './services/cloudflareRealtimeService';
 import { audioCaptureManager } from './audio/AudioCaptureManager';
 import {
   getActualDisplaySurface,
@@ -9,7 +9,6 @@ import {
   RequestedWebMode
 } from './audio/webCapturePolicy';
 import { DesktopSource, VIDEO_QUALITY_PRESETS, WindowsAudioEnvironment, AudioCaptureStrategy } from '@stream-app/shared';
-import { ConnectionState } from 'livekit-client';
 import { SourcePickerModal } from './components/SourcePickerModal';
 import { StreamPublisher } from './components/StreamPublisher';
 import { StreamViewer } from './components/StreamViewer';
@@ -105,7 +104,6 @@ export const App: React.FC = () => {
   const [isStreamLoading, setIsStreamLoading] = useState<boolean>(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
-  const [connectionState, setConnectionState] = useState<ConnectionState | null>(null);
 
   // Who is streaming (display name string)
   const [streamingIdentity, setStreamingIdentity] = useState<string | null>(null);
@@ -163,12 +161,15 @@ export const App: React.FC = () => {
     [members]
   );
 
+  useEffect(() => {
+    cloudflareRealtimeService.setDiagnosticContext(roomId, myParticipantId);
+  }, [roomId, myParticipantId]);
+
   // ─── LiveKit Callbacks ──────────────────────────────────────────────
 
   useEffect(() => {
-    livekitService.setCallbacks({
+    cloudflareRealtimeService.setCallbacks({
       onRemoteTrackSubscribed: (info: RemoteStreamInfo) => {
-        console.log('[App] Remote track subscribed for participantId:', info.participantId, 'displayName:', info.displayName);
         const resolvedName = resolveDisplayName(info.participantId, info.displayName);
         setRemoteStreams((prev) =>
           new Map(prev).set(info.participantId, {
@@ -184,7 +185,6 @@ export const App: React.FC = () => {
         }
       },
       onRemoteTrackUnsubscribed: (participantId: string) => {
-        console.log('[App] Remote media state cleared:', participantId);
         setRemoteStreams((prev) => {
           const next = new Map(prev);
           next.delete(participantId);
@@ -192,11 +192,9 @@ export const App: React.FC = () => {
         });
         if (remoteStreams.size <= 1) setStreamingIdentity(null);
       },
-      onConnectionStateChanged: (state: ConnectionState) => {
-        setConnectionState(state);
-      },
+      onConnectionStateChanged: () => undefined,
       onError: (error: Error) => {
-        console.error('[App] LiveKit error:', error);
+        console.error('[App] Cloudflare Realtime error:', error);
       },
       onSubscriptionFailed: (participantId: string, error: Error) => {
         if (participantId !== selectedStreamParticipantIdRef.current) return;
@@ -254,7 +252,7 @@ export const App: React.FC = () => {
           return next;
         });
         if (participantId === selectedStreamParticipantIdRef.current) {
-          void livekitService.unsubscribeFromParticipant(participantId);
+          void cloudflareRealtimeService.unsubscribeFromParticipant(participantId, true, 'user-left');
           setSelectedStreamParticipantId(null);
           setWatchModalOpen(false);
           setIsStreamLoading(false);
@@ -291,32 +289,31 @@ export const App: React.FC = () => {
     socket.on('stream-started', ({ participantId, identity }: { streamerSocketId?: string; participantId?: string; identity?: string } = {}) => {
       if (identity) setStreamingIdentity(identity);
       if (participantId) {
+        if (import.meta.env.DEV) console.log('[CLOUDFLARE][STREAM_DISCOVERED]', { participantId, roomId, displayName: identity || resolveDisplayName(participantId) });
         setActiveStreamers((prev) => new Map(prev).set(participantId, {
           participantId,
           displayName: identity || resolveDisplayName(participantId),
         }));
       }
-      if (roomId && !livekitService.connected && !livekitService.isConnecting) {
-        connectAsViewer(roomId, getEffectiveIdentity());
-      }
     });
 
     socket.on('stream-stopped', ({ participantId }: { participantId?: string } = {}) => {
       if (participantId) {
+        if (import.meta.env.DEV) console.log('[CLOUDFLARE][TARGET_STREAM_STOPPED]', { participantId, wasCurrentTarget: participantId === selectedStreamParticipantIdRef.current });
         setActiveStreamers((prev) => {
           const next = new Map(prev);
           next.delete(participantId);
           return next;
         });
         if (participantId === selectedStreamParticipantIdRef.current) {
-          void livekitService.unsubscribeFromParticipant(participantId);
+          void cloudflareRealtimeService.unsubscribeFromParticipant(participantId, true, 'stream-stopped');
           setSelectedStreamParticipantId(null);
           setWatchModalOpen(false);
           setIsStreamLoading(false);
         }
       } else {
         setActiveStreamers(new Map());
-        void livekitService.unsubscribeAll();
+        void cloudflareRealtimeService.unsubscribeAll();
         setRemoteStreams(new Map());
         setStreamingIdentity(null);
         setWatchModalOpen(false);
@@ -339,7 +336,7 @@ export const App: React.FC = () => {
         setIsHost(newIsHost);
       }
       if (sessionToken) {
-        livekitService.setSessionToken(sessionToken);
+        cloudflareRealtimeService.setSessionToken(sessionToken);
         try {
           sessionStorage.setItem('tellas_session_token', sessionToken);
         } catch (_) { }
@@ -366,18 +363,6 @@ export const App: React.FC = () => {
       socket.off('host-transferred');
     };
   }, [roomId, isHost, getEffectiveIdentity, myParticipantId, resolveDisplayName]);
-
-  // ─── Connect As Viewer Helper ───────────────────────────────────────
-
-  const connectAsViewer = useCallback(async (room: string, identity: string) => {
-    if (livekitService.connected || livekitService.isConnecting) return;
-    try {
-      const tokenResponse = await livekitService.requestToken({ roomId: room, identity, role: 'viewer' });
-      await livekitService.connect(tokenResponse);
-    } catch (err: any) {
-      console.error('[App] Failed to connect as viewer:', err);
-    }
-  }, []);
 
   // ─── Host Administrative Actions ───────────────────────────────────
 
@@ -467,7 +452,8 @@ export const App: React.FC = () => {
     socket.emit('create-room', { identity }, (res: any) => {
       if (res.success) {
         if (res.sessionToken) {
-          livekitService.setSessionToken(res.sessionToken);
+          cloudflareRealtimeService.setSessionToken(res.sessionToken);
+          cloudflareRealtimeService.setDiagnosticContext(res.roomId, res.participantId);
           try {
             sessionStorage.setItem('tellas_session_token', res.sessionToken);
             sessionStorage.setItem('tellas_session_room', res.roomId);
@@ -481,12 +467,11 @@ export const App: React.FC = () => {
         setIsRoomLocked(false);
         setMembers(res.members || [{ socketId: socket.id, participantId: res.participantId, identity, isHost: true }]);
         setActiveStreamers(new Map());
-        connectAsViewer(res.roomId, identity);
       } else {
         alert(res.error || 'Erro ao criar sala');
       }
     });
-  }, [getEffectiveIdentity, connectAsViewer]);
+  }, [getEffectiveIdentity]);
 
   const handleJoinRoom = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -500,7 +485,8 @@ export const App: React.FC = () => {
     socket.emit('join-room', { roomId: cleanRoomId, identity, sessionToken: savedToken }, (res: any) => {
       if (res.success) {
         if (res.sessionToken) {
-          livekitService.setSessionToken(res.sessionToken);
+          cloudflareRealtimeService.setSessionToken(res.sessionToken);
+          cloudflareRealtimeService.setDiagnosticContext(res.roomId, res.participantId);
           try {
             sessionStorage.setItem('tellas_session_token', res.sessionToken);
             sessionStorage.setItem('tellas_session_room', res.roomId);
@@ -518,7 +504,6 @@ export const App: React.FC = () => {
           const member = joinedMembers.find((item) => item.participantId === participantId);
           return [participantId, { participantId, displayName: member?.identity || 'Participante' }];
         })));
-        connectAsViewer(res.roomId, identity);
       } else {
         alert(res.error || 'Erro ao entrar na sala');
       }
@@ -526,10 +511,11 @@ export const App: React.FC = () => {
   }, [inputRoomId, getEffectiveIdentity]);
 
   const handleLeaveRoom = useCallback(async () => {
-    if (roomId) socket.emit('leave-room', { roomId });
     await handleStopStream();
-    await livekitService.disconnect();
-    livekitService.setSessionToken(null);
+    await cloudflareRealtimeService.disconnect();
+    if (roomId) socket.emit('leave-room', { roomId });
+    cloudflareRealtimeService.setSessionToken(null);
+    cloudflareRealtimeService.setDiagnosticContext(null, null);
     try {
       sessionStorage.removeItem('tellas_session_token');
       sessionStorage.removeItem('tellas_session_room');
@@ -546,7 +532,6 @@ export const App: React.FC = () => {
     setSelectedStreamParticipantId(null);
     setIsStreamLoading(false);
     setStreamError(null);
-    setConnectionState(null);
     setStreamingIdentity(null);
     setWatchModalOpen(false);
   }, [roomId]);
@@ -562,7 +547,7 @@ export const App: React.FC = () => {
 
   // ─── Streaming Actions ───────────────────────────────────────
 
-  const startStreamingViaLiveKit = async (videoStream: MediaStream) => {
+  const startStreamingViaCloudflare = async (videoStream: MediaStream) => {
     let finalStream = videoStream;
     const identity = getEffectiveIdentity();
 
@@ -604,23 +589,15 @@ export const App: React.FC = () => {
         audioTrackId: audioTrack?.id || 'NONE',
         audioTrackState: audioTrack?.readyState || 'NONE',
         videoTrackId: videoTrack?.id || 'NONE'
-      }, 'LIVEKIT');
+      }, 'CLOUDFLARE');
 
-      const tokenResponse = await livekitService.requestToken({ roomId, identity, role: 'publisher' });
-
-      const watchTarget = selectedStreamParticipantIdRef.current;
-      if (livekitService.connected) await livekitService.disconnect();
-      await livekitService.connect(tokenResponse);
-      if (watchTarget) await livekitService.subscribeToParticipant(watchTarget);
-
-      livekitService.setQualityPreset(qualityPreset);
-      await livekitService.publishStream(finalStream);
+      await cloudflareRealtimeService.publishStream(finalStream);
 
       window.electronAPI?.sendAudioDiagnosticEvent?.('PUBLISH_STREAM_SUCCESS', {
         status: 'STREAM_PUBLISHED',
         hasAudioTrack: Boolean(audioTrack),
         finalAudioResult: audioTrack ? 'AUDIO_PUBLISHED' : 'VIDEO_ONLY'
-      }, 'LIVEKIT');
+      }, 'CLOUDFLARE');
 
       setLocalStream(finalStream);
       setIsStreaming(true);
@@ -631,7 +608,7 @@ export const App: React.FC = () => {
       console.error('[App] Failed to publish stream:', err);
       window.electronAPI?.sendAudioDiagnosticEvent?.('PUBLISH_STREAM_ERROR', {
         error: err.message
-      }, 'LIVEKIT');
+      }, 'CLOUDFLARE');
       alert(`Erro ao iniciar transmissão: ${err.message}`);
       setIsStreaming(false);
       setLocalStream(null);
@@ -659,7 +636,7 @@ export const App: React.FC = () => {
       });
 
       setIsModalOpen(false);
-      await startStreamingViaLiveKit(stream);
+      await startStreamingViaCloudflare(stream);
       stream.getVideoTracks()[0].onended = () => handleStopStream();
     } catch (err: any) {
       console.error('[App] Failed to capture screen source:', err);
@@ -677,7 +654,7 @@ export const App: React.FC = () => {
 
       setSelectedSource({ id: 'native:screen', name: 'Tela Selecionada', thumbnail: '' });
       setIsModalOpen(false);
-      await startStreamingViaLiveKit(stream);
+      await startStreamingViaCloudflare(stream);
       stream.getVideoTracks()[0].onended = () => handleStopStream();
     } catch (err: any) {
       if (err.name !== 'NotAllowedError') {
@@ -743,7 +720,7 @@ export const App: React.FC = () => {
 
       setSelectedSource({ id: `web:${actualSurface}`, name: sourceName, thumbnail: '' });
       setIsModalOpen(false);
-      await startStreamingViaLiveKit(finalStream);
+      await startStreamingViaCloudflare(finalStream);
       finalStream.getVideoTracks()[0].onended = () => handleStopStream();
     } catch (err: any) {
       if (err.name !== 'NotAllowedError') {
@@ -754,21 +731,27 @@ export const App: React.FC = () => {
 
   const handleStopStream = async () => {
     audioCaptureManager.stop();
+    let mediaClosed = false;
+    try {
+      await cloudflareRealtimeService.unpublishAllTracks();
+      mediaClosed = true;
+    } catch (error) {
+      console.error('[App] Failed to stop Cloudflare publication:', error);
+      alert('Não foi possível encerrar a publicação na Cloudflare.');
+    }
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
       setLocalStream(null);
     }
-    await livekitService.unpublishAllTracks();
     setIsStreaming(false);
     setSelectedSource(null);
-    if (roomId) socket.emit('stop-stream', { roomId });
+    if (mediaClosed && roomId) socket.emit('stop-stream', { roomId });
   };
 
 
 
   const handleQualityChange = (presetKey: string) => {
     setQualityPreset(presetKey);
-    livekitService.setQualityPreset(presetKey);
   };
 
   const handleWatchStream = useCallback(async (participantId: string) => {
@@ -776,12 +759,12 @@ export const App: React.FC = () => {
     setWatchModalOpen(true);
     setIsStreamLoading(true);
     setStreamError(null);
-    await livekitService.subscribeToParticipant(participantId);
+    await cloudflareRealtimeService.subscribeToParticipant(participantId);
   }, []);
 
   const handleStopWatch = useCallback(async () => {
     const target = selectedStreamParticipantIdRef.current;
-    if (target) await livekitService.unsubscribeFromParticipant(target);
+    if (target) await cloudflareRealtimeService.unsubscribeFromParticipant(target);
     setSelectedStreamParticipantId(null);
     setWatchModalOpen(false);
     setIsStreamLoading(false);

@@ -8,6 +8,8 @@ import { verifySessionToken } from './auth/session';
 import { checkRateLimit } from './security/rateLimiter';
 import { resolveClientIp } from './security/ipResolver';
 import type { LiveKitTokenRequest } from '@stream-app/shared';
+import { CloudflareRealtimeClient } from './media/cloudflareRealtimeClient';
+import { registerRealtimeRoutes } from './routes/realtime';
 
 // ─── Environment Variables ──────────────────────────────────────────────────
 
@@ -15,6 +17,15 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 const LIVEKIT_URL = process.env.LIVEKIT_URL || '';
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || '';
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || '';
+const CLOUDFLARE_REALTIME_APP_ID = process.env.CLOUDFLARE_REALTIME_APP_ID || '';
+const CLOUDFLARE_REALTIME_API_TOKEN = process.env.CLOUDFLARE_REALTIME_API_TOKEN || '';
+const cloudflareRealtimeClient = new CloudflareRealtimeClient(
+  CLOUDFLARE_REALTIME_APP_ID,
+  CLOUDFLARE_REALTIME_API_TOKEN,
+);
+
+if (!CLOUDFLARE_REALTIME_APP_ID) console.error('[CloudflareRealtime] Missing CLOUDFLARE_REALTIME_APP_ID');
+if (!CLOUDFLARE_REALTIME_API_TOKEN) console.error('[CloudflareRealtime] Missing CLOUDFLARE_REALTIME_API_TOKEN');
 
 // Security: Reduced default LiveKit join token TTL to 30 minutes (1800s)
 const LIVEKIT_TOKEN_TTL = process.env.LIVEKIT_TOKEN_TTL
@@ -35,10 +46,24 @@ export async function buildApp() {
     credentials: true,
   });
 
+  app.addHook('onError', (request, _reply, error, done) => {
+    if (process.env.NODE_ENV !== 'production' && error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      console.error('[CLOUDFLARE][BODY_LIMIT_REJECTED]', {
+        route: request.url,
+        contentLength: Number(request.headers['content-length']) || null,
+        configuredLimit: request.routeOptions.bodyLimit,
+        rejectedBy: 'TELLAS_BACKEND',
+      });
+    }
+    done();
+  });
+
   // ─── Health Check (Public & Safe) ───────────────────────────────────
   app.get('/health', async () => {
     return { status: 'ok', timestamp: new Date().toISOString() };
   });
+
+  registerRealtimeRoutes(app, cloudflareRealtimeClient);
 
   // ─── Protected LiveKit Token Endpoint (SEC-001 Resolved) ─────────────
   app.post<{ Body: LiveKitTokenRequest }>('/api/livekit/token', async (request: FastifyRequest<{ Body: LiveKitTokenRequest }>, reply: FastifyReply) => {
@@ -178,6 +203,7 @@ async function main() {
   console.log(`   Health:  GET  http://localhost:${PORT}/health`);
   console.log(`   Token:   POST http://localhost:${PORT}/api/livekit/token (Protected with Tellas Session Bearer)`);
   console.log(`   LiveKit: ${LIVEKIT_URL || '⚠️  NOT CONFIGURED'}`);
+  console.log(`   Cloudflare Realtime: ${cloudflareRealtimeClient.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
   console.log(`==================================================\n`);
 }
 

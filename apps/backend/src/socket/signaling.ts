@@ -4,6 +4,7 @@ import { RoomState, MemberInfo } from '@stream-app/shared';
 import { createSessionToken, verifySessionToken } from '../auth/session';
 import { checkRateLimit } from '../security/rateLimiter';
 import { resolveClientIp } from '../security/ipResolver';
+import { cloudflareSessionRegistry } from '../media/cloudflareSessionRegistry';
 
 // ─── Quotas & Resource Limits ───────────────────────────────────────────────
 
@@ -134,6 +135,7 @@ export function resetRoomStore(): void {
     }
   }
   rooms.clear();
+  cloudflareSessionRegistry.reset();
 }
 
 // ─── Socket.IO Signaling & Room Management ──────────────────────────────────
@@ -506,6 +508,14 @@ export function setupSignaling(io: SocketIOServer) {
           return;
         }
 
+        const registeredStream = cloudflareSessionRegistry.getStream(participantId);
+        if (!registeredStream || registeredStream.roomId !== cleanRoomId) {
+          if (typeof callback === 'function') {
+            callback({ success: false, error: 'A mídia ainda não foi publicada na Cloudflare.' });
+          }
+          return;
+        }
+
         // Rate limit: 10 stream actions per minute per participant
         const rateCheck = checkRateLimit(`participant:${participantId}:stream`, 10, 60 * 1000);
         if (!rateCheck.allowed) {
@@ -526,6 +536,12 @@ export function setupSignaling(io: SocketIOServer) {
 
         // Add this participant to active streamers
         room.activeStreamers.add(participantId);
+        if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][STREAM_ANNOUNCED]', {
+          participantId,
+          roomId: cleanRoomId,
+          hasVideoTrack: Boolean(registeredStream.videoTrackId),
+          hasAudioTrack: Boolean(registeredStream.audioTrackId),
+        });
         console.log(
           `[Stream] Participant ${participantId} (${member.identity}) started streaming in ${cleanRoomId} (active streamers: ${room.activeStreamers.size})`
         );
@@ -572,8 +588,16 @@ export function setupSignaling(io: SocketIOServer) {
           return;
         }
 
+        if (cloudflareSessionRegistry.getStream(participantId)) {
+          if (typeof callback === 'function') {
+            callback({ success: false, error: 'Encerre a publicação Cloudflare antes de anunciar stop-stream.' });
+          }
+          return;
+        }
+
         // Stop ONLY the caller's own stream (preserves other streamers!)
         room.activeStreamers.delete(participantId);
+        if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][STREAM_STOPPED_ANNOUNCED]', { participantId, roomId: cleanRoomId });
         console.log(
           `[Stream] Participant ${participantId} (${member.identity}) stopped streaming in ${cleanRoomId} (remaining streamers: ${room.activeStreamers.size})`
         );
@@ -668,6 +692,7 @@ export function setupSignaling(io: SocketIOServer) {
         // 1. If target is streaming, remove from activeStreamers and emit stream-stopped
         if (room.activeStreamers.has(targetParticipantId)) {
           room.activeStreamers.delete(targetParticipantId);
+          cloudflareSessionRegistry.removeStream(targetParticipantId, 'explicit-cleanup');
           socket.to(cleanRoomId).emit('stream-stopped', {
             streamerSocketId: targetMember.currentSocketId || '',
             participantId: targetParticipantId,
@@ -675,6 +700,7 @@ export function setupSignaling(io: SocketIOServer) {
             remainingStreamersCount: room.activeStreamers.size,
           });
         }
+        cloudflareSessionRegistry.removeParticipant(targetParticipantId, 'explicit-cleanup');
 
         // 2. Target socket cleanup & notification
         const targetSocketId = targetMember.currentSocketId;
@@ -875,7 +901,11 @@ function handleExplicitLeave(socket: Socket, roomId: string) {
   }
 
   // Clean up streaming and membership immediately
+  const wasStreaming = room.activeStreamers.has(participantId);
+  if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_LEFT]', { participantId, roomId, wasStreaming, hadCloudflareSession: Boolean(cloudflareSessionRegistry.getSession(participantId)) });
   room.activeStreamers.delete(participantId);
+  cloudflareSessionRegistry.removeParticipant(participantId, 'leave');
+  if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_CLEANUP_COMPLETE]', { participantId, roomId });
   room.socketToParticipant.delete(socket.id);
   room.members.delete(participantId);
 
@@ -923,7 +953,9 @@ function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
   if (!member) return;
 
   // 1. Immediately remove from activeStreamers (NO ghost streams!)
+  if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_LEFT]', { participantId, roomId, wasStreaming: room.activeStreamers.has(participantId), hadCloudflareSession: Boolean(cloudflareSessionRegistry.getSession(participantId)) });
   room.activeStreamers.delete(participantId);
+  cloudflareSessionRegistry.removeStream(participantId, 'disconnect');
   // 2. Remove socket mapping
   room.socketToParticipant.delete(socket.id);
   member.currentSocketId = null;
@@ -953,6 +985,8 @@ function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
     const currentMember = currentRoom.members.get(participantId);
     if (currentMember && currentMember.currentSocketId === null) {
       currentRoom.members.delete(participantId);
+      cloudflareSessionRegistry.removeParticipant(participantId, 'disconnect');
+      if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_CLEANUP_COMPLETE]', { participantId, roomId });
       console.log(`[Room] Reconnect grace period expired for participant ${participantId} in ${roomId}`);
 
       if (currentRoom.members.size === 0) {
