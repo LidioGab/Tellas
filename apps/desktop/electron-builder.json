@@ -6,6 +6,12 @@
     "output": "release",
     "buildResources": "build"
   },
+  "publish": {
+    "provider": "github",
+    "owner": "LidioGab",
+    "repo": "Tellas",
+    "releaseType": "release"
+  },
   "files": [
     "dist/**/*",
     "package.json"
@@ -50,4 +56,3 @@
     "**/node_modules/ffmpeg-static/**"
   ]
 }
-

@@ -1,4 +1,5 @@
 import { DesktopSource, WindowsAudioEnvironment } from '@stream-app/shared';
+import type { AppInfo, UpdaterStatus } from '../../../updater/types';
 
 export interface AudioDevice {
   id: string;
@@ -31,6 +32,19 @@ export interface ElectronAPI {
   stopAudioCapture: () => Promise<{ success: boolean; error?: string }>;
   onAudioBuffer: (callback: (buffer: Float32Array) => void) => () => void;
   onAudioCaptureError: (callback: (error: string) => void) => () => void;
+  sendAudioDiagnosticEvent?: (category: string, data: unknown, layer?: string) => void;
+  getAudioDiagnosticPath?: () => Promise<{ path: string | null; dir: string }>;
+  openAudioDiagnosticFolder?: () => Promise<{ success: boolean }>;
+  appInfo: {
+    get: () => Promise<AppInfo>;
+  };
+  updater: {
+    getStatus: () => Promise<UpdaterStatus>;
+    check: () => Promise<UpdaterStatus>;
+    download: () => Promise<UpdaterStatus>;
+    install: () => Promise<boolean>;
+    onStatusChanged: (callback: (status: UpdaterStatus) => void) => () => void;
+  };
 }
 
 declare global {

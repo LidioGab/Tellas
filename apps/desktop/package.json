@@ -1,6 +1,6 @@
 {
   "name": "@stream-app/desktop",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Tellas — Compartilhamento de tela em tempo real com áudio isolado",
   "author": "Tellas",
   "private": true,
@@ -10,12 +10,14 @@
     "build:electron": "tsc -p tsconfig.node.json",
     "build:renderer": "vite build",
     "build": "npm run build:electron && npm run build:renderer",
+    "test:updater": "tsx tests/auto-updater-mvp.ts",
     "package": "vite build && electron-builder --dir -c electron-builder.json",
     "package:installer": "vite build && electron-builder --win nsis --dir -c electron-builder.json",
     "package:exe": "vite build && electron-builder --win -c electron-builder.json"
   },
   "dependencies": {
     "@stream-app/shared": "*",
+    "electron-updater": "6.8.9",
     "ffmpeg-static": "^5.3.0",
     "livekit-client": "^2.22.0",
     "lucide-react": "^0.344.0",

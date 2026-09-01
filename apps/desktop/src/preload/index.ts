@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { DesktopSource, WindowsAudioEnvironment } from '@stream-app/shared';
+import type { AppInfo, UpdaterStatus } from '../updater/types';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // ─── Phase 1: Screen Capture Sources ──────────────────────────────────────
@@ -81,5 +82,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Open folder containing audio diagnostic files */
   openAudioDiagnosticFolder: (): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('open-audio-diagnostic-folder');
-  }
+  },
+
+  appInfo: {
+    get: (): Promise<AppInfo> => ipcRenderer.invoke('app:get-info'),
+  },
+
+  updater: {
+    getStatus: (): Promise<UpdaterStatus> => ipcRenderer.invoke('updater:get-status'),
+    check: (): Promise<UpdaterStatus> => ipcRenderer.invoke('updater:check'),
+    download: (): Promise<UpdaterStatus> => ipcRenderer.invoke('updater:download'),
+    install: (): Promise<boolean> => ipcRenderer.invoke('updater:install'),
+    onStatusChanged: (callback: (status: UpdaterStatus) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, status: UpdaterStatus) => callback(status);
+      ipcRenderer.on('updater:status', handler);
+      return () => ipcRenderer.removeListener('updater:status', handler);
+    },
+  },
 });

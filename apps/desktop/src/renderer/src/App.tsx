@@ -17,6 +17,7 @@ import { SourcePickerModal } from './components/SourcePickerModal';
 import { StreamPublisher } from './components/StreamPublisher';
 import { StreamViewer } from './components/StreamViewer';
 import { TellasLogo } from './components/TellasLogo';
+import { AppUpdateControl } from './components/AppUpdateControl';
 import {
   Monitor,
   Users,
@@ -993,6 +994,7 @@ export const App: React.FC = () => {
 
         {/* Right: User Profile & Leave Action */}
         <div className="flex items-center gap-2">
+          <AppUpdateControl mediaActive={isStreaming || watchModalOpen} />
           <div className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-[#16191F] transition">
             <div className="w-5 h-5 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-bold text-[#F4F6F8] uppercase">
               {userName ? userName.charAt(0) : 'U'}

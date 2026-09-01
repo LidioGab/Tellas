@@ -19,7 +19,7 @@ export default defineConfig({
                 build: {
                   outDir: path.resolve(__dirname, 'dist/main'),
                   rollupOptions: {
-                    external: ['electron', '@stream-app/native-audio']
+                    external: ['electron', 'electron-updater', '@stream-app/native-audio']
                   }
                 }
               }
@@ -54,7 +54,8 @@ export default defineConfig({
   root: 'src/renderer',
   publicDir: path.resolve(__dirname, 'public'),
   build: {
-    outDir: path.resolve(__dirname, 'dist/renderer')
+    outDir: path.resolve(__dirname, 'dist/renderer'),
+    emptyOutDir: true
   },
 
   server: {

@@ -28,6 +28,11 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
   const [controlsVisible, setControlsVisible] = useState<boolean>(true);
   const [isAdjustingVolume, setIsAdjustingVolume] = useState<boolean>(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playbackPreferencesRef = useRef({ isMuted, volume });
+
+  useEffect(() => {
+    playbackPreferencesRef.current = { isMuted, volume };
+  }, [isMuted, volume]);
 
   const {
     layoutMode,
@@ -84,14 +89,18 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
   // ─── Attach stream to video element ─────────────────────────────────
   useEffect(() => {
     if (videoRef.current && remoteStream) {
-      videoRef.current.srcObject = remoteStream;
-      videoRef.current.muted = false;
-      videoRef.current
+      const video = videoRef.current;
+      const preferences = playbackPreferencesRef.current;
+
+      if (video.srcObject !== remoteStream) {
+        video.srcObject = remoteStream;
+      }
+      video.muted = preferences.isMuted;
+      video.volume = preferences.volume;
+      video
         .play()
         .then(() => {
           setAutoplayBlocked(false);
-          setIsMuted(false);
-          resetHideTimer();
         })
         .catch((err) => {
           console.warn('[StreamViewer] Autoplay blocked, playing muted:', err);
@@ -103,7 +112,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
           }
         });
     }
-  }, [remoteStream, resetHideTimer]);
+  }, [remoteStream]);
 
   // Initial timer setup
   useEffect(() => {

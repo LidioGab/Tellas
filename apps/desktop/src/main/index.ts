@@ -1,7 +1,9 @@
 import { app, BrowserWindow, ipcMain, desktopCapturer } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import electronUpdater from 'electron-updater';
 import { discordAudioIsolationService } from './DiscordAudioIsolationService';
+import { AppUpdaterService } from './AppUpdaterService';
 
 
 // Enable Chromium Desktop System Audio & Screen Capturing Switches
@@ -9,6 +11,17 @@ app.commandLine.appendSwitch('enable-usermedia-screen-capturing');
 app.commandLine.appendSwitch('allow-http-screen-capture');
 
 let mainWindow: BrowserWindow | null = null;
+const { autoUpdater } = electronUpdater;
+const appUpdaterService = new AppUpdaterService({
+  updater: autoUpdater,
+  isPackaged: app.isPackaged,
+  currentVersion: app.getVersion(),
+  onStatusChanged: (status) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('updater:status', status);
+    }
+  },
+});
 
 function getAppIconPath(): string | undefined {
   const possiblePaths = [
@@ -83,6 +96,16 @@ ipcMain.handle('get-sources', async () => {
     return [];
   }
 });
+
+ipcMain.handle('app:get-info', () => ({
+  runtime: 'desktop' as const,
+  version: app.getVersion(),
+}));
+
+ipcMain.handle('updater:get-status', () => appUpdaterService.getStatus());
+ipcMain.handle('updater:check', () => appUpdaterService.checkForUpdates());
+ipcMain.handle('updater:download', () => appUpdaterService.downloadUpdate());
+ipcMain.handle('updater:install', () => appUpdaterService.installUpdate());
 
 import { win10AudioLogger } from './Win10AudioDiagnosticLogger';
 
@@ -195,6 +218,7 @@ app.whenReady().then(() => {
   console.log(`[AudioStrategy] OS: ${env.windowsVersion} build ${env.build} | Process Loopback supported: ${env.processLoopbackSupported} -> ${env.strategy}`);
 
   createWindow();
+  appUpdaterService.initialize();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
