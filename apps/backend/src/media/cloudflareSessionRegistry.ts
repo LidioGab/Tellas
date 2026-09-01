@@ -28,6 +28,14 @@ class CloudflareSessionRegistry {
   private readonly streams = new Map<string, ActiveCloudflareStream>();
   private readonly subscriptions = new Map<string, ActiveSubscription>();
 
+  getStats(): { sessions: number; streams: number; subscriptions: number } {
+    return {
+      sessions: this.sessions.size,
+      streams: this.streams.size,
+      subscriptions: this.subscriptions.size,
+    };
+  }
+
   setSession(session: ParticipantMediaSession): void {
     this.sessions.set(session.participantId, session);
     if (DEV) console.log('[CLOUDFLARE][SESSION_REGISTRY_SET]', {

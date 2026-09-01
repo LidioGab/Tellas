@@ -9,6 +9,7 @@ import {
   type CloudflareSessionDescription,
 } from '../media/cloudflareRealtimeClient';
 import { cloudflareSessionRegistry } from '../media/cloudflareSessionRegistry';
+import { logInstanceEvent } from '../observability/instance';
 
 interface AuthenticatedMediaRequest {
   session: SessionPayload;
@@ -50,6 +51,11 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply): Promi
   }
   const room = getRoom(session.roomId);
   if (!room) {
+    logInstanceEvent('ROOM_LOOKUP_FAILED', {
+      operation: request.url,
+      roomId: session.roomId,
+      participantId: session.participantId,
+    });
     devLog('AUTHORIZATION_REJECTED', { reason: 'NOT_IN_ROOM', participantId: session.participantId, roomId: session.roomId });
     reply.status(404).send({ error: 'Sala não encontrada.', code: 'ROOM_NOT_FOUND' });
     return null;
@@ -144,6 +150,9 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     const mediaSession = ownedSession(auth.session.participantId, auth.session.roomId);
     if (!mediaSession) return reply.status(409).send({ error: 'Sessão de mídia ausente.', code: 'MEDIA_SESSION_REQUIRED' });
     if (!auth.session.canPublish) return reply.status(403).send({ error: 'Publicação não autorizada.', code: 'PUBLISH_FORBIDDEN' });
+    if (!auth.room.reservedPublishers.has(auth.session.participantId)) {
+      return reply.status(409).send({ error: 'Reserva de transmissão ausente ou expirada.', code: 'STREAM_RESERVATION_REQUIRED' });
+    }
     if (!isSessionDescription(request.body?.sessionDescription)) {
       return reply.status(400).send({ error: 'SDP inválido.', code: 'INVALID_SESSION_DESCRIPTION' });
     }

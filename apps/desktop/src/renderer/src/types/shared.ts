@@ -98,9 +98,17 @@ export interface SignalingEvents {
   ) => void;
   // Room actions (Session Token removed: authenticated via socket binding)
   'leave-room': (payload: { roomId: string }) => void;
-  'start-stream': (
-    payload: { roomId: string; identity?: string },
-    callback?: (response: { success: boolean; error?: string }) => void
+  'reserve-stream': (
+    payload: { roomId: string },
+    callback: (response: { success: boolean; error?: string; code?: string; expiresInMs?: number }) => void
+  ) => void;
+  'confirm-stream': (
+    payload: { roomId: string },
+    callback: (response: { success: boolean; error?: string; code?: string }) => void
+  ) => void;
+  'release-stream-reservation': (
+    payload: { roomId: string },
+    callback: (response: { success: boolean; error?: string; code?: string; released?: boolean }) => void
   ) => void;
   'stop-stream': (
     payload: { roomId: string },

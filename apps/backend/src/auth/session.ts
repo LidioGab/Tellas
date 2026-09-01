@@ -1,27 +1,19 @@
 import * as jose from 'jose';
-import * as crypto from 'crypto';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-const isProduction = process.env.NODE_ENV === 'production';
-let sessionSecretString = process.env.TELLAS_SESSION_SECRET || '';
-
-if (!sessionSecretString) {
-  if (isProduction) {
-    sessionSecretString = process.env.LIVEKIT_API_SECRET || crypto.randomBytes(32).toString('hex');
-    console.warn(
-      '[Security] WARNING: TELLAS_SESSION_SECRET not explicitly configured. Using derived secure session secret.'
-    );
-  } else {
-    // Use stable secret in development to persist across dev restarts
-    sessionSecretString = 'tellas-dev-secret-stable-key-at-least-32-chars-12345';
-    console.log(
-      '[Security] INFO: TELLAS_SESSION_SECRET not set in env. Using default development secret.'
-    );
+export function resolveSessionSecret(nodeEnv: string | undefined, configuredSecret: string | undefined): string {
+  const secret = configuredSecret?.trim();
+  if (secret) return secret;
+  if (nodeEnv === 'production') {
+    console.error('[TELLAS][SESSION_SECRET_MISSING] TELLAS_SESSION_SECRET is required in production');
+    throw new Error('TELLAS_SESSION_SECRET is required in production');
   }
+  console.log('[Security] INFO: TELLAS_SESSION_SECRET not set. Using the stable development-only fallback.');
+  return 'tellas-dev-secret-stable-key-at-least-32-chars-12345';
 }
 
-
+const sessionSecretString = resolveSessionSecret(process.env.NODE_ENV, process.env.TELLAS_SESSION_SECRET);
 const SESSION_SECRET = new TextEncoder().encode(sessionSecretString);
 
 export const TELLAS_SESSION_TTL_SECONDS = process.env.TELLAS_SESSION_TTL

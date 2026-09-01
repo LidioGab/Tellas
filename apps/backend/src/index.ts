@@ -3,13 +3,15 @@ import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
 import cors from '@fastify/cors';
 import { Server as SocketIOServer } from 'socket.io';
 import * as jose from 'jose';
-import { setupSignaling, getRoom } from './socket/signaling';
+import { setupSignaling, getRoom, getRoomCount } from './socket/signaling';
 import { verifySessionToken } from './auth/session';
 import { checkRateLimit } from './security/rateLimiter';
 import { resolveClientIp } from './security/ipResolver';
 import type { LiveKitTokenRequest } from '@stream-app/shared';
 import { CloudflareRealtimeClient } from './media/cloudflareRealtimeClient';
 import { registerRealtimeRoutes } from './routes/realtime';
+import { backendInstance, getUptimeSeconds, logInstanceEvent } from './observability/instance';
+import { cloudflareSessionRegistry } from './media/cloudflareSessionRegistry';
 
 // ─── Environment Variables ──────────────────────────────────────────────────
 
@@ -60,7 +62,17 @@ export async function buildApp() {
 
   // ─── Health Check (Public & Safe) ───────────────────────────────────
   app.get('/health', async () => {
-    return { status: 'ok', timestamp: new Date().toISOString() };
+    const media = cloudflareSessionRegistry.getStats();
+    return {
+      status: 'ok',
+      machineId: backendInstance.machineId,
+      pid: backendInstance.pid,
+      uptimeSeconds: getUptimeSeconds(),
+      roomCount: getRoomCount(),
+      activeCloudflareSessions: media.sessions,
+      version: process.env.FLY_IMAGE_REF || process.env.GIT_COMMIT_SHA || process.env.npm_package_version || null,
+      timestamp: new Date().toISOString(),
+    };
   });
 
   registerRealtimeRoutes(app, cloudflareRealtimeClient);
@@ -184,6 +196,10 @@ export async function buildApp() {
 }
 
 async function main() {
+  logInstanceEvent('BACKEND_INSTANCE_STARTED', {
+    pid: backendInstance.pid,
+    nodeEnv: backendInstance.nodeEnv,
+  });
   await buildApp();
   await app.ready();
 

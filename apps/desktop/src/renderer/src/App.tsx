@@ -40,6 +40,7 @@ import {
 } from 'lucide-react';
 
 import { useLayoutMode } from './hooks/useLayoutMode';
+import { runAtomicPublishLifecycle, type PublishCommandResponse } from './services/publishLifecycle';
 
 interface Member {
   participantId?: string;
@@ -72,6 +73,19 @@ interface ActionModalState {
   targetParticipantId?: string;
   targetSocketId?: string;
   targetName: string;
+}
+
+function emitStreamCommand(
+  event: 'reserve-stream' | 'confirm-stream' | 'release-stream-reservation',
+  roomId: string,
+): Promise<PublishCommandResponse> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error(`Tempo limite em ${event}.`)), 10_000);
+    socket.emit(event, { roomId }, (response: PublishCommandResponse) => {
+      window.clearTimeout(timeout);
+      resolve(response || { success: false, error: `Resposta inválida em ${event}.` });
+    });
+  });
 }
 
 export const App: React.FC = () => {
@@ -742,7 +756,16 @@ export const App: React.FC = () => {
         videoTrackId: videoTrack?.id || 'NONE'
       }, 'CLOUDFLARE');
 
-      await cloudflareRealtimeService.publishStream(finalStream);
+      await runAtomicPublishLifecycle({
+        reserve: () => emitStreamCommand('reserve-stream', roomId),
+        publish: () => cloudflareRealtimeService.publishStream(finalStream),
+        confirm: () => emitStreamCommand('confirm-stream', roomId),
+        rollbackPublish: () => cloudflareRealtimeService.unpublishAllTracks(),
+        releaseReservation: () => emitStreamCommand('release-stream-reservation', roomId),
+        onCleanupError: (operation, cleanupError) => {
+          console.error(`[App] Failed atomic publish cleanup (${operation}):`, cleanupError);
+        },
+      });
 
       window.electronAPI?.sendAudioDiagnosticEvent?.('PUBLISH_STREAM_SUCCESS', {
         status: 'STREAM_PUBLISHED',
@@ -754,7 +777,6 @@ export const App: React.FC = () => {
       setIsStreaming(true);
       setStreamingIdentity(identity);
 
-      socket.emit('start-stream', { roomId, identity });
     } catch (err: any) {
       console.error('[App] Failed to publish stream:', err);
       window.electronAPI?.sendAudioDiagnosticEvent?.('PUBLISH_STREAM_ERROR', {

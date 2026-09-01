@@ -17,6 +17,9 @@ packages/native-audio/build/
 
 # Scratch and temporary dev tools
 scratch/
+!scratch/
+scratch/*
+!scratch/test_production_stability.ts
 scratch_*
 
 # Environment files

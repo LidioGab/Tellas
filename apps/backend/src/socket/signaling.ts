@@ -5,6 +5,7 @@ import { createSessionToken, verifySessionToken } from '../auth/session';
 import { checkRateLimit } from '../security/rateLimiter';
 import { resolveClientIp } from '../security/ipResolver';
 import { cloudflareSessionRegistry } from '../media/cloudflareSessionRegistry';
+import { logInstanceEvent } from '../observability/instance';
 
 // ─── Quotas & Resource Limits ───────────────────────────────────────────────
 
@@ -24,6 +25,10 @@ export const ROOM_RECONNECT_GRACE_MS = process.env.ROOM_RECONNECT_GRACE_MS
   ? parseInt(process.env.ROOM_RECONNECT_GRACE_MS, 10)
   : 30000; // 30 seconds reconnect grace period
 
+export const STREAM_RESERVATION_TTL_MS = process.env.STREAM_RESERVATION_TTL_MS
+  ? parseInt(process.env.STREAM_RESERVATION_TTL_MS, 10)
+  : 30000;
+
 // ─── State Model ────────────────────────────────────────────────────────────
 
 export interface BackendMemberInfo {
@@ -42,11 +47,38 @@ export interface ExtendedRoomState {
   members: Map<string, BackendMemberInfo>; // participantId -> BackendMemberInfo
   socketToParticipant: Map<string, string>; // socketId -> participantId
   activeStreamers: Set<string>; // Set of participantIds currently streaming
+  reservedPublishers: Map<string, NodeJS.Timeout>; // participantId -> expiration timer
   isLocked: boolean;
   createdAt: number;
 }
 
 const rooms = new Map<string, ExtendedRoomState>();
+
+export function getRoomCount(): number {
+  return rooms.size;
+}
+
+function clearPublisherReservation(room: ExtendedRoomState, participantId: string): boolean {
+  const timer = room.reservedPublishers.get(participantId);
+  if (!timer) return false;
+  clearTimeout(timer);
+  room.reservedPublishers.delete(participantId);
+  return true;
+}
+
+function reservePublisher(room: ExtendedRoomState, participantId: string): void {
+  const timer = setTimeout(() => {
+    if (!room.reservedPublishers.delete(participantId)) return;
+    logInstanceEvent('STREAM_RESERVATION_EXPIRED', {
+      operation: 'reserve-stream',
+      roomId: room.roomId,
+      participantId,
+      roomCount: rooms.size,
+    });
+  }, STREAM_RESERVATION_TTL_MS);
+  if (timer.unref) timer.unref();
+  room.reservedPublishers.set(participantId, timer);
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -127,6 +159,8 @@ export function getPublicRoomState(roomId: string): (RoomState & { isLocked?: bo
  */
 export function resetRoomStore(): void {
   for (const room of rooms.values()) {
+    for (const timer of room.reservedPublishers.values()) clearTimeout(timer);
+    room.reservedPublishers.clear();
     for (const member of room.members.values()) {
       if (member.disconnectTimer) {
         clearTimeout(member.disconnectTimer);
@@ -208,6 +242,7 @@ export function setupSignaling(io: SocketIOServer) {
         members,
         socketToParticipant,
         activeStreamers: new Set<string>(),
+        reservedPublishers: new Map<string, NodeJS.Timeout>(),
         isLocked: false,
         createdAt: Date.now(),
       };
@@ -216,6 +251,7 @@ export function setupSignaling(io: SocketIOServer) {
       socket.join(roomId);
 
       console.log(`[Room] Created ${roomId} by host ${participantId} (${identity})`);
+      logInstanceEvent('ROOM_CREATED', { operation: 'create-room', roomId, participantId, roomCount: rooms.size });
 
       if (typeof callback === 'function') {
         callback({
@@ -296,6 +332,12 @@ export function setupSignaling(io: SocketIOServer) {
         const room = rooms.get(cleanRoomId);
         // CRITICAL SECURITY RULE: Join CANNOT create non-existent room!
         if (!room) {
+          logInstanceEvent('ROOM_LOOKUP_FAILED', {
+            operation: 'join-room',
+            roomId: cleanRoomId,
+            participantId: null,
+            roomCount: rooms.size,
+          });
           if (typeof callback === 'function') {
             callback({
               success: false,
@@ -333,6 +375,12 @@ export function setupSignaling(io: SocketIOServer) {
             console.log(
               `[Room] Reconnected participant ${existingMember.participantId} (${existingMember.identity}) in room ${cleanRoomId}`
             );
+            logInstanceEvent('PARTICIPANT_RECONNECTED', {
+              operation: 'join-room',
+              roomId: cleanRoomId,
+              participantId: existingMember.participantId,
+              roomCount: rooms.size,
+            });
 
             const isHostActual = existingMember.role === 'host' && existingMember.participantId === room.hostParticipantId;
 
@@ -431,6 +479,12 @@ export function setupSignaling(io: SocketIOServer) {
         socket.join(cleanRoomId);
 
         console.log(`[Room] Participant ${participantId} (${identity}) joined room ${cleanRoomId}`);
+        logInstanceEvent('PARTICIPANT_JOINED', {
+          operation: 'join-room',
+          roomId: cleanRoomId,
+          participantId,
+          roomCount: rooms.size,
+        });
 
         const memberList: MemberInfo[] = Array.from(room.members.values()).map((m) => ({
           participantId: m.participantId,
@@ -471,91 +525,123 @@ export function setupSignaling(io: SocketIOServer) {
       }
     );
 
-    // ─── 3. Start Stream (Multi-Streaming Authorized) ────────────────
-    socket.on(
-      'start-stream',
-      async (payload: { roomId: string; identity?: string }, callback) => {
-        if (!payload || !payload.roomId) {
-          if (typeof callback === 'function') callback({ success: false, error: 'roomId obrigatório' });
-          return;
-        }
-
-        const cleanRoomId = payload.roomId.trim().toUpperCase();
-        const room = rooms.get(cleanRoomId);
-
-        if (!room) {
-          if (typeof callback === 'function') callback({ success: false, error: 'Sala não encontrada' });
-          return;
-        }
-
-        // Security: Post-auth actions rely strictly on active server-side socket binding
-        const participantId = room.socketToParticipant.get(socket.id);
-        if (!participantId) {
-          console.warn(`[Security] Unauthorized start-stream attempt from unmapped socket ${socket.id} on room ${cleanRoomId}`);
-          if (typeof callback === 'function') callback({ success: false, error: 'Não autorizado: socket não associado' });
-          return;
-        }
-
-        const member = room.members.get(participantId);
-        if (!member || member.currentSocketId !== socket.id) {
-          console.warn(`[Security] Stale socket ${socket.id} attempted start-stream for participant ${participantId}`);
-          if (typeof callback === 'function') callback({ success: false, error: 'Socket desatualizado ou não autorizado' });
-          return;
-        }
-
-        if (!member.canPublish) {
-          if (typeof callback === 'function') callback({ success: false, error: 'Permissão de transmissão negada' });
-          return;
-        }
-
-        const registeredStream = cloudflareSessionRegistry.getStream(participantId);
-        if (!registeredStream || registeredStream.roomId !== cleanRoomId) {
-          if (typeof callback === 'function') {
-            callback({ success: false, error: 'A mídia ainda não foi publicada na Cloudflare.' });
-          }
-          return;
-        }
-
-        // Rate limit: 10 stream actions per minute per participant
-        const rateCheck = checkRateLimit(`participant:${participantId}:stream`, 10, 60 * 1000);
-        if (!rateCheck.allowed) {
-          if (typeof callback === 'function') callback({ success: false, error: 'Muitas ações de stream recentes' });
-          return;
-        }
-
-        // Quota check: max simultaneous publishers
-        if (room.activeStreamers.size >= MAX_PUBLISHERS_PER_ROOM && !room.activeStreamers.has(participantId)) {
-          if (typeof callback === 'function') {
-            callback({
-              success: false,
-              error: `Limite de ${MAX_PUBLISHERS_PER_ROOM} transmissões simultâneas atingido`,
-            });
-          }
-          return;
-        }
-
-        // Add this participant to active streamers
-        room.activeStreamers.add(participantId);
-        if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][STREAM_ANNOUNCED]', {
-          participantId,
-          roomId: cleanRoomId,
-          hasVideoTrack: Boolean(registeredStream.videoTrackId),
-          hasAudioTrack: Boolean(registeredStream.audioTrackId),
+    // ─── 3. Publisher Reservation / Confirmation ─────────────────────
+    socket.on('reserve-stream', (payload: { roomId?: string }, callback) => {
+      const cleanRoomId = payload?.roomId?.trim().toUpperCase();
+      const room = cleanRoomId ? rooms.get(cleanRoomId) : undefined;
+      if (!room) {
+        logInstanceEvent('ROOM_LOOKUP_FAILED', {
+          operation: 'reserve-stream',
+          roomId: cleanRoomId || null,
+          participantId: null,
+          roomCount: rooms.size,
         });
-        console.log(
-          `[Stream] Participant ${participantId} (${member.identity}) started streaming in ${cleanRoomId} (active streamers: ${room.activeStreamers.size})`
-        );
-
-        // Broadcast to other room members with server-verified streamer identity
-        socket.to(cleanRoomId).emit('stream-started', {
-          streamerSocketId: socket.id,
-          participantId,
-          identity: member.identity,
-        });
-
-        if (typeof callback === 'function') callback({ success: true });
+        if (typeof callback === 'function') callback({ success: false, code: 'ROOM_NOT_FOUND', error: 'Sala não encontrada' });
+        return;
       }
-    );
+
+      const participantId = room.socketToParticipant.get(socket.id);
+      const member = participantId ? room.members.get(participantId) : undefined;
+      if (!participantId || !member || member.currentSocketId !== socket.id) {
+        if (typeof callback === 'function') callback({ success: false, code: 'STREAM_UNAUTHORIZED', error: 'Socket não associado à sala.' });
+        return;
+      }
+      if (!member.canPublish) {
+        if (typeof callback === 'function') callback({ success: false, code: 'PUBLISH_FORBIDDEN', error: 'Permissão de transmissão negada.' });
+        return;
+      }
+      if (room.activeStreamers.has(participantId) || room.reservedPublishers.has(participantId) || cloudflareSessionRegistry.getStream(participantId)) {
+        if (typeof callback === 'function') callback({ success: false, code: 'STREAM_ALREADY_EXISTS', error: 'Já existe uma reserva ou publicação para este participante.' });
+        return;
+      }
+
+      const rateCheck = checkRateLimit(`participant:${participantId}:stream`, 10, 60 * 1000);
+      if (!rateCheck.allowed) {
+        if (typeof callback === 'function') callback({ success: false, code: 'RATE_LIMITED', error: 'Muitas ações de stream recentes.' });
+        return;
+      }
+      if (room.activeStreamers.size + room.reservedPublishers.size >= MAX_PUBLISHERS_PER_ROOM) {
+        if (typeof callback === 'function') callback({
+          success: false,
+          code: 'PUBLISHER_LIMIT_REACHED',
+          error: `Limite de ${MAX_PUBLISHERS_PER_ROOM} transmissões simultâneas atingido.`,
+        });
+        return;
+      }
+
+      reservePublisher(room, participantId);
+      logInstanceEvent('STREAM_RESERVED', {
+        operation: 'reserve-stream',
+        roomId: cleanRoomId,
+        participantId,
+        roomCount: rooms.size,
+      });
+      if (typeof callback === 'function') callback({ success: true, expiresInMs: STREAM_RESERVATION_TTL_MS });
+    });
+
+    socket.on('confirm-stream', (payload: { roomId?: string }, callback) => {
+      const cleanRoomId = payload?.roomId?.trim().toUpperCase();
+      const room = cleanRoomId ? rooms.get(cleanRoomId) : undefined;
+      if (!room) {
+        logInstanceEvent('ROOM_LOOKUP_FAILED', {
+          operation: 'confirm-stream',
+          roomId: cleanRoomId || null,
+          participantId: null,
+          roomCount: rooms.size,
+        });
+        if (typeof callback === 'function') callback({ success: false, code: 'ROOM_NOT_FOUND', error: 'Sala não encontrada' });
+        return;
+      }
+
+      const participantId = room.socketToParticipant.get(socket.id);
+      const member = participantId ? room.members.get(participantId) : undefined;
+      if (!participantId || !member || member.currentSocketId !== socket.id) {
+        if (typeof callback === 'function') callback({ success: false, code: 'STREAM_UNAUTHORIZED', error: 'Socket não associado à sala.' });
+        return;
+      }
+      if (!room.reservedPublishers.has(participantId)) {
+        if (typeof callback === 'function') callback({ success: false, code: 'STREAM_RESERVATION_REQUIRED', error: 'Reserva de transmissão ausente ou expirada.' });
+        return;
+      }
+
+      const registeredStream = cloudflareSessionRegistry.getStream(participantId);
+      if (!registeredStream || registeredStream.roomId !== cleanRoomId) {
+        if (typeof callback === 'function') callback({ success: false, code: 'CLOUDFLARE_STREAM_REQUIRED', error: 'A mídia ainda não foi publicada na Cloudflare.' });
+        return;
+      }
+
+      clearPublisherReservation(room, participantId);
+      room.activeStreamers.add(participantId);
+      if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][STREAM_ANNOUNCED]', {
+        participantId,
+        roomId: cleanRoomId,
+        hasVideoTrack: Boolean(registeredStream.videoTrackId),
+        hasAudioTrack: Boolean(registeredStream.audioTrackId),
+      });
+      socket.to(cleanRoomId).emit('stream-started', {
+        streamerSocketId: socket.id,
+        participantId,
+        identity: member.identity,
+      });
+      if (typeof callback === 'function') callback({ success: true });
+    });
+
+    socket.on('release-stream-reservation', (payload: { roomId?: string }, callback) => {
+      const cleanRoomId = payload?.roomId?.trim().toUpperCase();
+      const room = cleanRoomId ? rooms.get(cleanRoomId) : undefined;
+      if (!room) {
+        if (typeof callback === 'function') callback({ success: true, released: false });
+        return;
+      }
+      const participantId = room.socketToParticipant.get(socket.id);
+      const member = participantId ? room.members.get(participantId) : undefined;
+      if (!participantId || !member || member.currentSocketId !== socket.id) {
+        if (typeof callback === 'function') callback({ success: false, code: 'STREAM_UNAUTHORIZED', error: 'Socket não associado à sala.' });
+        return;
+      }
+      const released = clearPublisherReservation(room, participantId);
+      if (typeof callback === 'function') callback({ success: true, released });
+    });
 
     // ─── 4. Stop Stream (Multi-Streaming Authorized) ─────────────────
     socket.on(
@@ -688,6 +774,8 @@ export function setupSignaling(io: SocketIOServer) {
           if (typeof callback === 'function') callback({ success: false, error: 'Participante não encontrado na sala' });
           return;
         }
+
+        clearPublisherReservation(room, targetParticipantId);
 
         // 1. If target is streaming, remove from activeStreamers and emit stream-stopped
         if (room.activeStreamers.has(targetParticipantId)) {
@@ -872,8 +960,8 @@ export function setupSignaling(io: SocketIOServer) {
 
     // ─── 9. Involuntary Transport Disconnect (Grace Period) ──────────
 
-    socket.on('disconnect', () => {
-      console.log(`[Socket] Disconnected: ${socket.id}`);
+    socket.on('disconnect', (reason) => {
+      console.log(`[Socket] Disconnected: ${socket.id} (reason: ${reason})`);
       rooms.forEach((_room, roomId) => {
         handleInvoluntaryDisconnect(socket, roomId);
       });
@@ -902,10 +990,17 @@ function handleExplicitLeave(socket: Socket, roomId: string) {
 
   // Clean up streaming and membership immediately
   const wasStreaming = room.activeStreamers.has(participantId);
+  clearPublisherReservation(room, participantId);
   if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_LEFT]', { participantId, roomId, wasStreaming, hadCloudflareSession: Boolean(cloudflareSessionRegistry.getSession(participantId)) });
   room.activeStreamers.delete(participantId);
   cloudflareSessionRegistry.removeParticipant(participantId, 'leave');
   if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_CLEANUP_COMPLETE]', { participantId, roomId });
+  logInstanceEvent('PARTICIPANT_FINAL_CLEANUP', {
+    operation: 'leave-room',
+    roomId,
+    participantId,
+    roomCount: rooms.size,
+  });
   room.socketToParticipant.delete(socket.id);
   room.members.delete(participantId);
 
@@ -929,6 +1024,7 @@ function handleExplicitLeave(socket: Socket, roomId: string) {
 
   if (room.members.size === 0) {
     rooms.delete(roomId);
+    logInstanceEvent('ROOM_DELETED', { operation: 'leave-room', roomId, participantId, roomCount: rooms.size });
     console.log(`[Room] Explicit leave: cleaned up empty room ${roomId}`);
   } else if (room.hostParticipantId === participantId) {
     // Security: Host authority is a security principal and is NEVER automatically transferred.
@@ -952,22 +1048,20 @@ function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
   const member = room.members.get(participantId);
   if (!member) return;
 
-  // 1. Immediately remove from activeStreamers (NO ghost streams!)
-  if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_LEFT]', { participantId, roomId, wasStreaming: room.activeStreamers.has(participantId), hadCloudflareSession: Boolean(cloudflareSessionRegistry.getSession(participantId)) });
-  room.activeStreamers.delete(participantId);
-  cloudflareSessionRegistry.removeStream(participantId, 'disconnect');
-  // 2. Remove socket mapping
+  // Keep membership and media registry during the reconnect grace period.
+  // A transient transport close must not destroy a valid publication.
+  const wasStreaming = room.activeStreamers.has(participantId);
+
+  // Reservations are not publications and must never survive a transport loss.
+  clearPublisherReservation(room, participantId);
+
+  // 1. Remove only the ephemeral socket binding.
   room.socketToParticipant.delete(socket.id);
   member.currentSocketId = null;
 
-  socket.to(roomId).emit('user-left', {
-    socketId: socket.id,
-    participantId,
-  });
-
   socket.leave(roomId);
 
-  // 3. Clear existing timer if any
+  // 2. Clear existing timer if any
   if (member.disconnectTimer) {
     clearTimeout(member.disconnectTimer);
   }
@@ -976,7 +1070,7 @@ function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
     `[Room] Participant ${participantId} disconnected. Starting ${ROOM_RECONNECT_GRACE_MS}ms reconnect grace period.`
   );
 
-  // 4. Start grace timer before removing membership
+  // 3. Start grace timer before removing membership and media state
   member.disconnectTimer = setTimeout(() => {
     // Grace period expired without reconnect
     const currentRoom = rooms.get(roomId);
@@ -984,13 +1078,44 @@ function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
 
     const currentMember = currentRoom.members.get(participantId);
     if (currentMember && currentMember.currentSocketId === null) {
+      if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_LEFT]', {
+        participantId,
+        roomId,
+        wasStreaming,
+        hadCloudflareSession: Boolean(cloudflareSessionRegistry.getSession(participantId)),
+      });
+      currentRoom.activeStreamers.delete(participantId);
       currentRoom.members.delete(participantId);
       cloudflareSessionRegistry.removeParticipant(participantId, 'disconnect');
+      socket.to(roomId).emit('user-left', {
+        socketId: socket.id,
+        participantId,
+      });
+      socket.to(roomId).emit('room-members-updated', Array.from(currentRoom.members.values()).map((m) => ({
+        participantId: m.participantId,
+        identity: m.identity,
+        role: m.role,
+        canPublish: m.canPublish,
+        isHost: m.role === 'host' && m.participantId === currentRoom.hostParticipantId,
+        socketId: m.currentSocketId || undefined,
+      })));
       if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_CLEANUP_COMPLETE]', { participantId, roomId });
+      logInstanceEvent('PARTICIPANT_FINAL_CLEANUP', {
+        operation: 'disconnect-grace-expired',
+        roomId,
+        participantId,
+        roomCount: rooms.size,
+      });
       console.log(`[Room] Reconnect grace period expired for participant ${participantId} in ${roomId}`);
 
       if (currentRoom.members.size === 0) {
         rooms.delete(roomId);
+        logInstanceEvent('ROOM_DELETED', {
+          operation: 'disconnect-grace-expired',
+          roomId,
+          participantId,
+          roomCount: rooms.size,
+        });
         console.log(`[Room] Cleaned up empty room ${roomId} after grace expiration`);
       } else if (currentRoom.hostParticipantId === participantId) {
         // Security: Host authority is a security principal and is NEVER automatically transferred.
