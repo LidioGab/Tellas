@@ -38,7 +38,8 @@ import {
   UserX,
   History,
   ArrowRight,
-  ClipboardPaste
+  ClipboardPaste,
+  Loader2
 } from 'lucide-react';
 
 import { useLayoutMode } from './hooks/useLayoutMode';
@@ -104,6 +105,16 @@ function emitStreamCommand(
   });
 }
 
+function emitStopStreamCommand(roomId: string): Promise<PublishCommandResponse> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error('Tempo limite ao encerrar transmissão.')), 10_000);
+    socket.emit('stop-stream', { roomId }, (response: PublishCommandResponse) => {
+      window.clearTimeout(timeout);
+      resolve(response || { success: false, error: 'Resposta inválida ao encerrar transmissão.' });
+    });
+  });
+}
+
 export const App: React.FC = () => {
   const [userName, setUserName] = useState<string>(() => {
     return localStorage.getItem('stream_username') || generateRandomName();
@@ -142,6 +153,7 @@ export const App: React.FC = () => {
   const [isStreamLoading, setIsStreamLoading] = useState<boolean>(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
+  const [isStartingStream, setIsStartingStream] = useState<boolean>(false);
 
   // Who is streaming (display name string)
   const [streamingIdentity, setStreamingIdentity] = useState<string | null>(null);
@@ -347,10 +359,6 @@ export const App: React.FC = () => {
           })
         );
         setStreamingIdentity(resolvedName);
-        if (info.participantId === selectedStreamParticipantIdRef.current && info.stream.getVideoTracks().length > 0) {
-          setIsStreamLoading(false);
-          setStreamError(null);
-        }
       },
       onRemoteTrackUnsubscribed: (participantId: string) => {
         setRemoteStreams((prev) => {
@@ -383,6 +391,13 @@ export const App: React.FC = () => {
       },
     });
   }, [resolveDisplayName, remoteStreams.size]);
+
+  useEffect(() => {
+    if (!isInRoom || activeStreamers.size === 0) return;
+    void cloudflareRealtimeService.connect().catch((error) => {
+      console.warn('[App] Failed to prepare Cloudflare viewer session:', error);
+    });
+  }, [activeStreamers.size, isInRoom]);
 
   // ─── Socket.IO Room Events ──────────────────────────────────────────
 
@@ -771,6 +786,30 @@ export const App: React.FC = () => {
 
   // ─── Streaming Actions ───────────────────────────────────────
 
+  const stopCurrentPublication = async (): Promise<boolean> => {
+    try {
+      await cloudflareRealtimeService.unpublishAllTracks();
+      if (roomId) {
+        const response = await emitStopStreamCommand(roomId);
+        if (!response.success) throw new Error(response.error || 'Não foi possível encerrar a transmissão atual.');
+      }
+    } catch (error) {
+      console.error('[App] Failed to stop Cloudflare publication:', error);
+      alert(error instanceof Error ? error.message : 'Não foi possível encerrar a publicação na Cloudflare.');
+      return false;
+    }
+
+    audioCaptureManager.stop();
+    if (localStream) {
+      localStream.getVideoTracks().forEach((track) => { track.onended = null; });
+      localStream.getTracks().forEach((track) => track.stop());
+      setLocalStream(null);
+    }
+    setIsStreaming(false);
+    setSelectedSource(null);
+    return true;
+  };
+
   const startStreamingViaCloudflare = async (videoStream: MediaStream) => {
     try {
       await ensureRoomMembershipReady();
@@ -782,6 +821,27 @@ export const App: React.FC = () => {
       }
       throw error;
     }
+
+    if (isStreaming && localStream) {
+      const newVideoTrack = videoStream.getVideoTracks()[0];
+      if (!newVideoTrack) {
+        videoStream.getTracks().forEach((track) => track.stop());
+        throw new Error('A nova fonte não forneceu vídeo.');
+      }
+      try {
+        const previousVideoTrack = await cloudflareRealtimeService.replacePublishedVideoTrack(newVideoTrack);
+        previousVideoTrack.onended = null;
+        previousVideoTrack.stop();
+        setLocalStream(new MediaStream([newVideoTrack, ...localStream.getAudioTracks()]));
+        return;
+      } catch (error) {
+        videoStream.getTracks().forEach((track) => track.stop());
+        console.error('[App] Failed to replace published video track:', error);
+        alert(error instanceof Error ? error.message : 'Não foi possível alterar a fonte da transmissão.');
+        throw error;
+      }
+    }
+
     let finalStream = videoStream;
     const identity = getEffectiveIdentity();
 
@@ -863,7 +923,7 @@ export const App: React.FC = () => {
   };
 
   const handleStartCapture = async (source: DesktopSource) => {
-    setSelectedSource(source);
+    setIsStartingStream(true);
     const preset = VIDEO_QUALITY_PRESETS[qualityPreset] || VIDEO_QUALITY_PRESETS['1080p30'];
 
     try {
@@ -883,13 +943,17 @@ export const App: React.FC = () => {
 
       setIsModalOpen(false);
       await startStreamingViaCloudflare(stream);
+      setSelectedSource(source);
       stream.getVideoTracks()[0].onended = () => handleStopStream();
     } catch (err: any) {
       console.error('[App] Failed to capture screen source:', err);
+    } finally {
+      setIsStartingStream(false);
     }
   };
 
   const handleStartWebCapture = async () => {
+    setIsStartingStream(true);
     const preset = VIDEO_QUALITY_PRESETS[qualityPreset] || VIDEO_QUALITY_PRESETS['1080p30'];
 
     const videoConstraints: any = {
@@ -930,14 +994,16 @@ export const App: React.FC = () => {
           ? 'Janela'
           : 'Tela Inteira';
 
-      setSelectedSource({ id: `web:${actualSurface}`, name: sourceName, thumbnail: '' });
       setIsModalOpen(false);
       await startStreamingViaCloudflare(finalStream);
+      setSelectedSource({ id: `web:${actualSurface}`, name: sourceName, thumbnail: '' });
       finalStream.getVideoTracks()[0].onended = () => handleStopStream();
     } catch (err: any) {
       if (err.name !== 'NotAllowedError') {
         console.error('[App] Failed to getDisplayMedia on Web:', err);
       }
+    } finally {
+      setIsStartingStream(false);
     }
   };
 
@@ -950,22 +1016,7 @@ export const App: React.FC = () => {
   };
 
   const handleStopStream = async () => {
-    audioCaptureManager.stop();
-    let mediaClosed = false;
-    try {
-      await cloudflareRealtimeService.unpublishAllTracks();
-      mediaClosed = true;
-    } catch (error) {
-      console.error('[App] Failed to stop Cloudflare publication:', error);
-      alert('Não foi possível encerrar a publicação na Cloudflare.');
-    }
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-      setLocalStream(null);
-    }
-    setIsStreaming(false);
-    setSelectedSource(null);
-    if (mediaClosed && roomId) socket.emit('stop-stream', { roomId });
+    await stopCurrentPublication();
   };
 
 
@@ -973,6 +1024,11 @@ export const App: React.FC = () => {
   const handleQualityChange = (presetKey: string) => {
     setQualityPreset(presetKey);
   };
+
+  const handleFirstVideoFrame = useCallback(() => {
+    setIsStreamLoading(false);
+    setStreamError(null);
+  }, []);
 
   const handleWatchStream = useCallback(async (participantId: string) => {
     setSelectedStreamParticipantId(participantId);
@@ -1208,6 +1264,8 @@ export const App: React.FC = () => {
                   streamerName={activeStreamEntry[1].displayName}
                   roomId={roomId}
                   memberCount={members.length}
+                  isLoading={isStreamLoading}
+                  onFirstVideoFrame={handleFirstVideoFrame}
                 />
                 {/* Floating Multi-Stream Switcher in Landscape */}
                 {remoteStreams.size > 1 && (
@@ -1273,6 +1331,8 @@ export const App: React.FC = () => {
                   streamerName={activeStreamEntry[1].displayName}
                   roomId={roomId}
                   memberCount={members.length}
+                  isLoading={isStreamLoading}
+                  onFirstVideoFrame={handleFirstVideoFrame}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center p-4 text-center">
@@ -1683,6 +1743,7 @@ export const App: React.FC = () => {
               onClose={() => void handleStopWatch()}
               isLoading={isStreamLoading}
               errorMessage={streamError}
+              onFirstVideoFrame={handleFirstVideoFrame}
             />
           </div>
         </div>
@@ -1749,6 +1810,18 @@ export const App: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         onSelectSource={handleStartCapture}
       />
+
+      {isStartingStream && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-sm">
+          <div className="flex min-w-64 items-center gap-3 rounded-lg border border-[#252A34] bg-[#101217] px-5 py-4 shadow-card">
+            <Loader2 className="h-5 w-5 animate-spin text-[#5B7CFA]" />
+            <div>
+              <p className="text-sm font-semibold text-[#F4F6F8]">Preparando transmissão...</p>
+              <p className="mt-0.5 text-xs text-[#9DA5B4]">Conectando áudio e vídeo.</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

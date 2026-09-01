@@ -11,6 +11,7 @@ interface StreamViewerProps {
   onClose?: () => void;
   isLoading?: boolean;
   errorMessage?: string | null;
+  onFirstVideoFrame?: () => void;
 }
 
 export const StreamViewer: React.FC<StreamViewerProps> = ({
@@ -19,6 +20,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
   onClose,
   isLoading = false,
   errorMessage = null,
+  onFirstVideoFrame,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoBoxRef = useRef<HTMLDivElement>(null);
@@ -91,12 +93,24 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
     if (videoRef.current && remoteStream) {
       const video = videoRef.current;
       const preferences = playbackPreferencesRef.current;
+      let firstFrameReported = false;
+      let videoFrameCallbackId: number | null = null;
+
+      const reportFirstFrame = () => {
+        if (firstFrameReported || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+        firstFrameReported = true;
+        onFirstVideoFrame?.();
+      };
 
       if (video.srcObject !== remoteStream) {
         video.srcObject = remoteStream;
       }
       video.muted = preferences.isMuted;
       video.volume = preferences.volume;
+      video.addEventListener('loadeddata', reportFirstFrame);
+      if ('requestVideoFrameCallback' in video) {
+        videoFrameCallbackId = video.requestVideoFrameCallback(() => reportFirstFrame());
+      }
       video
         .play()
         .then(() => {
@@ -111,8 +125,15 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
             videoRef.current.play().catch(() => { });
           }
         });
+
+      return () => {
+        video.removeEventListener('loadeddata', reportFirstFrame);
+        if (videoFrameCallbackId !== null && 'cancelVideoFrameCallback' in video) {
+          video.cancelVideoFrameCallback(videoFrameCallbackId);
+        }
+      };
     }
-  }, [remoteStream]);
+  }, [onFirstVideoFrame, remoteStream]);
 
   // Initial timer setup
   useEffect(() => {
@@ -224,6 +245,13 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
             playsInline
             className="w-full h-full object-contain"
           />
+
+          {isLoading && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-[#080A0D]">
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-[#252A34] border-t-[#5B7CFA]" />
+              <p className="text-xs font-medium text-[#737C8A]">Recebendo vídeo...</p>
+            </div>
+          )}
 
           {/* ─── Top Overlay: Streamer info & Close button ─── */}
           <div

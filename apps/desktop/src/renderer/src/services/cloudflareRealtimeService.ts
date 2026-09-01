@@ -53,16 +53,42 @@ function toPayload(description: RTCSessionDescription | RTCSessionDescriptionIni
 async function waitForIceGathering(peerConnection: RTCPeerConnection): Promise<void> {
   if (peerConnection.iceGatheringState === 'complete') return;
   await new Promise<void>((resolve) => {
-    const timeout = window.setTimeout(done, 5_000);
+    let candidateGraceTimeout: number | null = null;
+    const maximumWaitTimeout = window.setTimeout(done, 2_000);
+
     function done() {
-      window.clearTimeout(timeout);
+      window.clearTimeout(maximumWaitTimeout);
+      if (candidateGraceTimeout !== null) window.clearTimeout(candidateGraceTimeout);
       peerConnection.removeEventListener('icegatheringstatechange', check);
+      peerConnection.removeEventListener('icecandidate', handleCandidate);
       resolve();
     }
+
     function check() {
       if (peerConnection.iceGatheringState === 'complete') done();
     }
+
+    function handleCandidate(event: RTCPeerConnectionIceEvent) {
+      const candidate = event.candidate?.candidate || '';
+      if (!candidate) {
+        if (peerConnection.iceGatheringState === 'complete') done();
+        return;
+      }
+      if (/ typ (srflx|relay) /i.test(candidate)) {
+        done();
+        return;
+      }
+      if (candidateGraceTimeout === null) {
+        candidateGraceTimeout = window.setTimeout(done, 500);
+      }
+    }
+
     peerConnection.addEventListener('icegatheringstatechange', check);
+    peerConnection.addEventListener('icecandidate', handleCandidate);
+
+    const existingSdp = peerConnection.localDescription?.sdp || '';
+    if (/ typ (srflx|relay) /i.test(existingSdp)) done();
+    else if (/a=candidate:/i.test(existingSdp)) candidateGraceTimeout = window.setTimeout(done, 500);
   });
 }
 
@@ -157,7 +183,8 @@ export class CloudflareRealtimeService {
         event.track.stop();
         return;
       }
-      const stream = this.remoteStreams.get(target) || new MediaStream();
+      const previousStream = this.remoteStreams.get(target);
+      const stream = new MediaStream(previousStream?.getTracks() || []);
       if (!stream.getTracks().some((track) => track.id === event.track.id)) stream.addTrack(event.track);
       this.remoteStreams.set(target, stream);
       event.track.onended = () => this.removeRemoteTrack(target, event.track.id);
@@ -203,6 +230,26 @@ export class CloudflareRealtimeService {
     }
   }
 
+  async replacePublishedVideoTrack(newTrack: MediaStreamTrack): Promise<MediaStreamTrack> {
+    if (!this.peerConnection || !this.localStream) {
+      throw new Error('Publicação Cloudflare ativa não encontrada.');
+    }
+    if (newTrack.kind !== 'video') {
+      throw new Error('A nova fonte precisa fornecer uma track de vídeo.');
+    }
+
+    const currentTrack = this.localStream.getVideoTracks()[0];
+    if (!currentTrack) throw new Error('Track de vídeo atual não encontrada.');
+    const sender = this.peerConnection.getSenders().find((item) => item.track?.id === currentTrack.id)
+      || this.peerConnection.getSenders().find((item) => item.track?.kind === 'video');
+    if (!sender) throw new Error('Sender de vídeo ativo não encontrado.');
+
+    await sender.replaceTrack(newTrack);
+    this.localStream.removeTrack(currentTrack);
+    this.localStream.addTrack(newTrack);
+    return currentTrack;
+  }
+
   async subscribeToParticipant(participantId: string): Promise<void> {
     const previous = this.currentlySubscribedParticipantId;
     if (previous && previous !== participantId) {
@@ -233,11 +280,13 @@ export class CloudflareRealtimeService {
       await this.api('renegotiate', { sessionDescription: toPayload(this.peerConnection.localDescription) });
       this.clearSubscriptionTimeout();
       this.subscriptionTimeout = setTimeout(() => {
-        const stream = this.remoteStreams.get(participantId);
-        if (generation !== this.subscriptionGeneration || stream?.getVideoTracks().length) return;
-        const error = new Error('Não foi possível conectar à transmissão.');
-        void this.unsubscribeFromParticipant(participantId, true, 'timeout').finally(() => this.callbacks?.onSubscriptionFailed?.(participantId, error));
-      }, 10_000);
+        void this.getInboundMediaStats().then((stats) => {
+          if (generation !== this.subscriptionGeneration || stats.videoFramesDecoded > 0) return;
+          const error = new Error('O vídeo da transmissão não começou a chegar. Tente assistir novamente.');
+          void this.unsubscribeFromParticipant(participantId, true, 'timeout')
+            .finally(() => this.callbacks?.onSubscriptionFailed?.(participantId, error));
+        }).catch((error) => this.callbacks?.onError(error instanceof Error ? error : new Error(String(error))));
+      }, 5_000);
     } catch (error) {
       if (generation === this.subscriptionGeneration) {
         await this.api('unsubscribe').catch(() => undefined);
@@ -366,8 +415,9 @@ export class CloudflareRealtimeService {
     this.subscriptionTimeout = null;
   }
 
-  async getInboundMediaStats(): Promise<{ participantId: string | null; videoBytesReceived: number; audioBytesReceived: number; videoTracks: number; audioTracks: number }> {
+  async getInboundMediaStats(): Promise<{ participantId: string | null; videoBytesReceived: number; videoFramesDecoded: number; audioBytesReceived: number; videoTracks: number; audioTracks: number }> {
     let videoBytesReceived = 0;
+    let videoFramesDecoded = 0;
     let audioBytesReceived = 0;
     let videoTracks = 0;
     let audioTracks = 0;
@@ -378,13 +428,14 @@ export class CloudflareRealtimeService {
         if (stat.kind === 'video' || stat.mediaType === 'video') {
           videoTracks++;
           videoBytesReceived += stat.bytesReceived;
+          videoFramesDecoded += typeof stat.framesDecoded === 'number' ? stat.framesDecoded : 0;
         } else if (stat.kind === 'audio' || stat.mediaType === 'audio') {
           audioTracks++;
           audioBytesReceived += stat.bytesReceived;
         }
       });
     }
-    return { participantId: this.currentlySubscribedParticipantId, videoBytesReceived, audioBytesReceived, videoTracks, audioTracks };
+    return { participantId: this.currentlySubscribedParticipantId, videoBytesReceived, videoFramesDecoded, audioBytesReceived, videoTracks, audioTracks };
   }
 
   get connected(): boolean {
