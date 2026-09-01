@@ -9,8 +9,7 @@ import { audioCaptureManager } from './audio/AudioCaptureManager';
 import {
   getActualDisplaySurface,
   resolveWebAudioPolicy,
-  sanitizeMediaStreamForPolicy,
-  RequestedWebMode
+  sanitizeMediaStreamForPolicy
 } from './audio/webCapturePolicy';
 import { DesktopSource, VIDEO_QUALITY_PRESETS, WindowsAudioEnvironment, AudioCaptureStrategy } from '@stream-app/shared';
 import { SourcePickerModal } from './components/SourcePickerModal';
@@ -27,7 +26,6 @@ import {
   PlusCircle,
   LogIn,
   LogOut,
-  ScreenShare,
   User,
   Settings,
   Crown,
@@ -37,7 +35,10 @@ import {
   Radio,
   Lock,
   Unlock,
-  UserX
+  UserX,
+  History,
+  ArrowRight,
+  ClipboardPaste
 } from 'lucide-react';
 
 import { useLayoutMode } from './hooks/useLayoutMode';
@@ -76,6 +77,20 @@ interface ActionModalState {
   targetName: string;
 }
 
+const LAST_ROOM_KEY = 'tellas_last_room';
+const LEGACY_LAST_DESKTOP_ROOM_KEY = 'tellas_desktop_last_room';
+
+function getLastRoom(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return localStorage.getItem(LAST_ROOM_KEY)
+      || localStorage.getItem(LEGACY_LAST_DESKTOP_ROOM_KEY)
+      || '';
+  } catch (_) {
+    return '';
+  }
+}
+
 function emitStreamCommand(
   event: 'reserve-stream' | 'confirm-stream' | 'release-stream-reservation',
   roomId: string,
@@ -95,6 +110,8 @@ export const App: React.FC = () => {
   });
   const [roomId, setRoomId] = useState<string>(() => sessionStorage.getItem('tellas_session_room') || '');
   const [inputRoomId, setInputRoomId] = useState<string>('');
+  const [lastRoomId, setLastRoomId] = useState<string>(getLastRoom);
+  const [isJoiningRoom, setIsJoiningRoom] = useState<boolean>(false);
   const [isInRoom, setIsInRoom] = useState<boolean>(() => Boolean(
     sessionStorage.getItem('tellas_session_room') && sessionStorage.getItem('tellas_session_token')
   ));
@@ -592,6 +609,24 @@ export const App: React.FC = () => {
 
   // ─── Room Actions ───────────────────────────────────────────────────
 
+  const rememberRoom = useCallback((nextRoomId: string) => {
+    const normalizedRoomId = nextRoomId.trim().toUpperCase();
+    try {
+      localStorage.setItem(LAST_ROOM_KEY, normalizedRoomId);
+      localStorage.removeItem(LEGACY_LAST_DESKTOP_ROOM_KEY);
+    } catch (_) { }
+    setLastRoomId(normalizedRoomId);
+  }, []);
+
+  const forgetRoom = useCallback((staleRoomId: string) => {
+    if (lastRoomId !== staleRoomId) return;
+    try {
+      localStorage.removeItem(LAST_ROOM_KEY);
+      localStorage.removeItem(LEGACY_LAST_DESKTOP_ROOM_KEY);
+    } catch (_) { }
+    setLastRoomId('');
+  }, [lastRoomId]);
+
   const handleCreateRoom = useCallback(() => {
     const identity = getEffectiveIdentity();
     try {
@@ -615,6 +650,7 @@ export const App: React.FC = () => {
         }
         setMyParticipantId(res.participantId || '');
         setRoomId(res.roomId);
+        rememberRoom(res.roomId);
         setIsInRoom(true);
         setIsHost(true);
         setIsRoomLocked(false);
@@ -624,18 +660,19 @@ export const App: React.FC = () => {
         alert(res.error || 'Erro ao criar sala');
       }
     });
-  }, [getEffectiveIdentity]);
+  }, [getEffectiveIdentity, rememberRoom]);
 
-  const handleJoinRoom = useCallback((e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputRoomId.trim()) return;
+  const joinRoom = useCallback((requestedRoomId: string, fromLastRoomShortcut = false) => {
+    const cleanRoomId = requestedRoomId.trim().toUpperCase();
+    if (!cleanRoomId || isJoiningRoom) return;
 
-    const cleanRoomId = inputRoomId.trim().toUpperCase();
+    setIsJoiningRoom(true);
     const identity = getEffectiveIdentity();
     const savedRoom = sessionStorage.getItem('tellas_session_room');
     const savedToken = (savedRoom === cleanRoomId ? sessionStorage.getItem('tellas_session_token') : null) || undefined;
 
     socket.emit('join-room', { roomId: cleanRoomId, identity, sessionToken: savedToken }, (res: any) => {
+      setIsJoiningRoom(false);
       if (res.success) {
         roomMembershipReadyRef.current = true;
         roomLossHandledRef.current = false;
@@ -650,6 +687,7 @@ export const App: React.FC = () => {
         }
         setMyParticipantId(res.participantId || '');
         setRoomId(res.roomId);
+        rememberRoom(res.roomId);
         setIsInRoom(true);
         setIsHost(res.isHost);
         setIsRoomLocked(res.isLocked || false);
@@ -660,10 +698,40 @@ export const App: React.FC = () => {
           return [participantId, { participantId, displayName: member?.identity || 'Participante' }];
         })));
       } else {
+        if (fromLastRoomShortcut && res.code === 'ROOM_NOT_FOUND') {
+          forgetRoom(cleanRoomId);
+        }
         alert(res.error || 'Erro ao entrar na sala');
       }
     });
-  }, [inputRoomId, getEffectiveIdentity]);
+  }, [forgetRoom, getEffectiveIdentity, isJoiningRoom, rememberRoom]);
+
+  const handleJoinRoom = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    joinRoom(inputRoomId);
+  }, [inputRoomId, joinRoom]);
+
+  const handleJoinLastRoom = useCallback(() => {
+    joinRoom(lastRoomId, true);
+  }, [joinRoom, lastRoomId]);
+
+  const handlePasteAndJoin = useCallback(async () => {
+    if (isJoiningRoom) return;
+
+    try {
+      const clipboardText = await navigator.clipboard.readText();
+      const pastedRoomId = clipboardText.trim().toUpperCase();
+      if (!/^[A-Z0-9]{4,8}$/.test(pastedRoomId)) {
+        alert('O conteúdo copiado não parece ser um código de sala válido.');
+        return;
+      }
+
+      setInputRoomId(pastedRoomId);
+      joinRoom(pastedRoomId);
+    } catch (_) {
+      alert('Não foi possível acessar a área de transferência. Cole o código manualmente.');
+    }
+  }, [isJoiningRoom, joinRoom]);
 
   const handleLeaveRoom = useCallback(async () => {
     roomMembershipReadyRef.current = false;
@@ -821,30 +889,8 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleStartNativeCapture = async () => {
+  const handleStartWebCapture = async () => {
     const preset = VIDEO_QUALITY_PRESETS[qualityPreset] || VIDEO_QUALITY_PRESETS['1080p30'];
-
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { width: { ideal: preset.width }, height: { ideal: preset.height }, frameRate: { ideal: preset.frameRate } },
-        audio: false
-      });
-
-      setSelectedSource({ id: 'native:screen', name: 'Tela Selecionada', thumbnail: '' });
-      setIsModalOpen(false);
-      await startStreamingViaCloudflare(stream);
-      stream.getVideoTracks()[0].onended = () => handleStopStream();
-    } catch (err: any) {
-      if (err.name !== 'NotAllowedError') {
-        console.error('[App] Failed to getDisplayMedia:', err);
-      }
-    }
-  };
-
-  const handleStartWebCapture = async (targetSurface: RequestedWebMode) => {
-    const preset = VIDEO_QUALITY_PRESETS[qualityPreset] || VIDEO_QUALITY_PRESETS['1080p30'];
-    const isFullScreen = targetSurface === 'monitor';
-    const shouldRequestAudio = !isFullScreen;
 
     const videoConstraints: any = {
       width: { ideal: preset.width },
@@ -852,34 +898,22 @@ export const App: React.FC = () => {
       frameRate: { ideal: preset.frameRate },
     };
 
-    if (targetSurface) {
-      videoConstraints.displaySurface = targetSurface;
-    }
-
     const displayMediaOptions: any = {
       video: videoConstraints,
-      audio: shouldRequestAudio
-        ? {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        }
-        : false,
-      systemAudio: isFullScreen ? 'exclude' : 'include',
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+      systemAudio: 'include',
     };
 
     try {
       const captureStream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
       const actualSurface = getActualDisplaySurface(captureStream);
       const hasAudio = captureStream.getAudioTracks().length > 0;
-      const policyResult = resolveWebAudioPolicy(targetSurface, actualSurface, hasAudio);
-
-      // If selection is incompatible with requested mode (e.g. clicked Tab but picked Window/Screen)
-      if (policyResult.decision === 'REJECT_SELECTION') {
-        captureStream.getTracks().forEach((track) => track.stop());
-        setAudioWarningMessage(policyResult.errorMessage);
-        return;
-      }
+      const selectedMode = actualSurface === 'unknown' ? 'browser' : actualSurface;
+      const policyResult = resolveWebAudioPolicy(selectedMode, actualSurface, hasAudio);
 
       // Sanitize stream: stops audio tracks if policy decision is FORCE_VIDEO_ONLY
       const finalStream = sanitizeMediaStreamForPolicy(captureStream, policyResult.decision);
@@ -905,6 +939,14 @@ export const App: React.FC = () => {
         console.error('[App] Failed to getDisplayMedia on Web:', err);
       }
     }
+  };
+
+  const handleOpenSharePicker = () => {
+    if (window.electronAPI?.getSources) {
+      setIsModalOpen(true);
+      return;
+    }
+    void handleStartWebCapture();
   };
 
   const handleStopStream = async () => {
@@ -987,6 +1029,23 @@ export const App: React.FC = () => {
                 {roomId}
                 {copied ? <Check className="w-3 h-3 text-[#34D399]" /> : <Copy className="w-3 h-3 text-[#687180]" />}
               </button>
+              {isHost ? (
+                <button
+                  onClick={handleToggleRoomLock}
+                  title={isRoomLocked ? 'Sala trancada (clique para abrir)' : 'Sala aberta (clique para trancar)'}
+                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${isRoomLocked
+                    ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30 hover:bg-[#F87171]/25'
+                    : 'bg-[#34D399]/15 text-[#34D399] border border-[#34D399]/30 hover:bg-[#34D399]/25'
+                    }`}
+                >
+                  {isRoomLocked ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
+                  {isRoomLocked ? 'Trancada' : 'Aberta'}
+                </button>
+              ) : isRoomLocked ? (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30">
+                  <Lock className="w-2.5 h-2.5" /> Trancada
+                </span>
+              ) : null}
             </div>
           )}
         </div>
@@ -1064,30 +1123,77 @@ export const App: React.FC = () => {
               {/* Subtle Divider */}
               <div className="relative flex items-center justify-center my-2">
                 <div className="border-t border-[#252A34] w-full"></div>
-                <span className="bg-[#16191F] px-2.5 text-[10px] text-[#505764] uppercase tracking-wider font-semibold absolute">
+                <span className="bg-[#16191F] px-2.5 text-[10px] text-[#687180] uppercase tracking-wider font-semibold absolute">
                   ou entrar com código
                 </span>
               </div>
 
               {/* Join Room Form */}
               <form onSubmit={handleJoinRoom} className="space-y-2.5">
-                <input
-                  type="text"
-                  placeholder="CÓDIGO DA SALA"
-                  value={inputRoomId}
-                  onChange={(e) => setInputRoomId(e.target.value.toUpperCase())}
-                  maxLength={8}
-                  className="w-full px-3 py-2 rounded-lg bg-[#101217] text-[#F4F6F8] font-mono placeholder:text-[#505764] focus:outline-none focus:border-[#323846] transition uppercase text-center text-xs tracking-widest border border-[#252A34]"
-                />
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#687180]">
+                  Código da sala
+                </label>
+                <div className="flex gap-2">
+                  <div className="relative min-w-0 flex-1">
+                    <span className="absolute inset-y-0 left-3 flex items-center font-mono text-sm text-[#687180]">#</span>
+                    <input
+                      type="text"
+                      placeholder="Digite o código da sala"
+                      value={inputRoomId}
+                      onChange={(e) => setInputRoomId(e.target.value.toUpperCase())}
+                      maxLength={8}
+                      className="w-full rounded-lg border border-[#252A34] bg-[#101217] py-2 pl-8 pr-3 font-mono text-xs uppercase tracking-widest text-[#F4F6F8] placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[#505764] transition focus:border-[#5B7CFA] focus:outline-none"
+                    />
+                  </div>
+                  {window.electronAPI && (
+                    <button
+                      type="button"
+                      onClick={handlePasteAndJoin}
+                      disabled={isJoiningRoom}
+                      className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[#33477E] bg-[#111725] px-3 text-xs font-medium text-[#7D97FF] transition hover:border-[#5B7CFA] hover:bg-[#151D30] disabled:cursor-wait disabled:opacity-50"
+                    >
+                      <ClipboardPaste className="h-3.5 w-3.5" />
+                      Colar
+                    </button>
+                  )}
+                </div>
                 <button
                   type="submit"
-                  disabled={!inputRoomId.trim()}
-                  className="w-full py-2.5 px-4 rounded-lg bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] hover:border-[#323846] disabled:opacity-40 disabled:cursor-not-allowed font-medium text-[#F4F6F8] text-xs flex items-center justify-center gap-1.5 transition shadow-subtle"
+                  disabled={!inputRoomId.trim() || isJoiningRoom}
+                  className="w-full py-2.5 px-4 rounded-lg bg-[#16191F] hover:bg-[#1D2129] border border-[#323846] hover:border-[#4A5364] disabled:opacity-40 disabled:cursor-not-allowed font-medium text-[#F4F6F8] text-xs flex items-center justify-center gap-1.5 transition shadow-subtle"
                 >
                   <LogIn className="w-3.5 h-3.5 text-[#9DA5B4]" />
-                  Entrar na Sala
+                  {isJoiningRoom ? 'Entrando...' : 'Entrar na Sala'}
                 </button>
               </form>
+
+              {lastRoomId && (
+                <button
+                  type="button"
+                  onClick={handleJoinLastRoom}
+                  disabled={isJoiningRoom}
+                  className="group w-full rounded-lg border border-[#405A9D] bg-[#11151C] px-3.5 py-3 text-left transition hover:border-[#5B7CFA] hover:bg-[#151A23] disabled:cursor-wait disabled:opacity-60"
+                >
+                  <span className="flex items-center gap-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#5B7CFA]/10 text-[#7D97FF]">
+                      <History className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[10px] font-semibold uppercase tracking-wider text-[#687180]">
+                        Última sala
+                      </span>
+                      <span className="mt-0.5 block font-mono text-sm font-semibold tracking-widest text-[#F4F6F8]">
+                        {lastRoomId}
+                      </span>
+                    </span>
+                    <span className="flex items-center gap-1 text-[11px] font-medium text-[#7D97FF]">
+                      {isJoiningRoom ? 'Entrando...' : 'Entrar'}
+                      {!isJoiningRoom && <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />}
+                    </span>
+                  </span>
+                </button>
+              )}
+
             </div>
           </div>
         ) : layoutMode === 'MOBILE_LANDSCAPE' ? (
@@ -1206,40 +1312,6 @@ export const App: React.FC = () => {
 
             {/* Mobile Scrollable Details */}
             <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
-              {/* Room Code Card & Lock Toggle */}
-              <div className="p-3 rounded-lg bg-[#16191F] border border-[#252A34] flex items-center justify-between shadow-subtle">
-                <div>
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180]">Sala</p>
-                    {isHost ? (
-                      <button
-                        onClick={handleToggleRoomLock}
-                        title={isRoomLocked ? 'Sala trancada (toque para abrir)' : 'Sala aberta (toque para trancar)'}
-                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${isRoomLocked
-                            ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30 hover:bg-[#F87171]/25'
-                            : 'bg-[#34D399]/15 text-[#34D399] border border-[#34D399]/30 hover:bg-[#34D399]/25'
-                          }`}
-                      >
-                        {isRoomLocked ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
-                        {isRoomLocked ? 'Trancada' : 'Aberta'}
-                      </button>
-                    ) : isRoomLocked ? (
-                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30">
-                        <Lock className="w-2.5 h-2.5" /> Trancada
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="text-xs font-mono font-bold text-[#F4F6F8] tracking-wider">{roomId}</p>
-                </div>
-                <button
-                  onClick={copyRoomCode}
-                  className="px-2.5 py-1.5 rounded-md bg-[#1D2129] hover:bg-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium flex items-center gap-1.5 transition"
-                >
-                  {copied ? <Check className="w-3.5 h-3.5 text-[#34D399]" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copied ? 'Copiado!' : 'Copiar código'}
-                </button>
-              </div>
-
               {/* Participants Section */}
               <div className="space-y-1.5">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180] px-1">
@@ -1342,38 +1414,6 @@ export const App: React.FC = () => {
           <div className="h-full flex overflow-hidden">
             {/* ── Left Sidebar (Width: 240px) ─────────────────────────── */}
             <aside className="w-60 shrink-0 bg-[#101217] border-r border-[#1D2129] flex flex-col overflow-hidden">
-              {/* Sala Header */}
-              <div className="px-4 pt-3.5 pb-2.5 border-b border-[#1D2129] flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180]">Sala</p>
-                    {isHost ? (
-                      <button
-                        onClick={handleToggleRoomLock}
-                        title={isRoomLocked ? 'Sala trancada (clique para abrir)' : 'Sala aberta (clique para trancar)'}
-                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${isRoomLocked
-                            ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30 hover:bg-[#F87171]/25'
-                            : 'bg-[#34D399]/15 text-[#34D399] border border-[#34D399]/30 hover:bg-[#34D399]/25'
-                          }`}
-                      >
-                        {isRoomLocked ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
-                        {isRoomLocked ? 'Trancada' : 'Aberta'}
-                      </button>
-                    ) : isRoomLocked ? (
-                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30">
-                        <Lock className="w-2.5 h-2.5" /> Trancada
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-[#F4F6F8] font-mono tracking-wider">{roomId}</span>
-                    <button onClick={copyRoomCode} className="text-[#687180] hover:text-[#F4F6F8] transition" title="Copiar">
-                      {copied ? <Check className="w-3 h-3 text-[#34D399]" /> : <Copy className="w-3 h-3" />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
               {/* Active Streamers Cards (Multi-stream support) */}
               {Array.from(activeStreamers.entries()).map(([participantId, item]) => (
                 <div key={participantId} className="mx-3 mt-2.5 p-2.5 rounded-lg bg-[#16191F] border border-[#252A34] shadow-subtle flex items-center justify-between">
@@ -1516,15 +1556,7 @@ export const App: React.FC = () => {
                   </div>
 
                   <button
-                    onClick={handleStartNativeCapture}
-                    className="w-full py-1.5 rounded-md bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium flex items-center justify-center gap-1.5 transition"
-                  >
-                    <ScreenShare className="w-3.5 h-3.5 text-[#5B7CFA]" />
-                    Seletor do Windows
-                  </button>
-
-                  <button
-                    onClick={() => setIsModalOpen(true)}
+                    onClick={handleOpenSharePicker}
                     className="w-full py-2 rounded-md bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white text-xs font-medium flex items-center justify-center gap-1.5 shadow-cta transition"
                   >
                     <Monitor className="w-3.5 h-3.5" />
@@ -1573,7 +1605,7 @@ export const App: React.FC = () => {
                       qualityPreset={currentPreset}
                       streamerName={userName}
                       onStopStream={handleStopStream}
-                      onChangeSource={() => setIsModalOpen(true)}
+                      onChangeSource={handleOpenSharePicker}
                     />
                   </div>
                 ) : (
@@ -1616,14 +1648,7 @@ export const App: React.FC = () => {
 
                       <div className="flex gap-2">
                         <button
-                          onClick={handleStartNativeCapture}
-                          className="px-3.5 py-1.5 rounded-md bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium flex items-center gap-1.5 transition"
-                        >
-                          <ScreenShare className="w-3.5 h-3.5 text-[#5B7CFA]" />
-                          Seletor do Windows
-                        </button>
-                        <button
-                          onClick={() => setIsModalOpen(true)}
+                          onClick={handleOpenSharePicker}
                           className={`px-4 py-1.5 rounded-md font-medium text-xs flex items-center gap-1.5 transition ${hasAnyActiveStreamer
                               ? 'bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] hover:border-[#5B7CFA] text-[#F4F6F8]'
                               : 'bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white shadow-cta'
@@ -1723,8 +1748,6 @@ export const App: React.FC = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSelectSource={handleStartCapture}
-        onSelectNativeDisplayMedia={handleStartNativeCapture}
-        onSelectWebSurface={handleStartWebCapture}
       />
     </div>
   );
