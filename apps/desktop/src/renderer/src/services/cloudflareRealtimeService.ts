@@ -98,6 +98,7 @@ export class CloudflareRealtimeService {
   private sessionToken: string | null = null;
   private sessionId: string | null = null;
   private connectingPromise: Promise<void> | null = null;
+  private subscriptionPromise: Promise<void> | null = null;
   private remoteStreams = new Map<string, MediaStream>();
   private currentlySubscribedParticipantId: string | null = null;
   private subscriptionGeneration = 0;
@@ -251,6 +252,28 @@ export class CloudflareRealtimeService {
   }
 
   async subscribeToParticipant(participantId: string): Promise<void> {
+    if (this.subscriptionPromise) return this.subscriptionPromise;
+    const operation = this.subscribeOnce(participantId, true);
+    const wrapped = operation.finally(() => {
+      if (this.subscriptionPromise === wrapped) this.subscriptionPromise = null;
+    });
+    this.subscriptionPromise = wrapped;
+    return wrapped;
+  }
+
+  private async applyRemoteOffer(sessionDescription?: SessionDescriptionPayload): Promise<void> {
+    if (!sessionDescription) return;
+    if (sessionDescription.type !== 'offer') throw new Error('Oferta WebRTC remota inválida.');
+    if (!this.peerConnection) throw new Error('PeerConnection Cloudflare indisponível.');
+    await this.peerConnection.setRemoteDescription(sessionDescription);
+    const answer = await this.peerConnection.createAnswer();
+    await this.peerConnection.setLocalDescription(answer);
+    await waitForIceGathering(this.peerConnection);
+    if (!this.peerConnection.localDescription) throw new Error('Resposta WebRTC local ausente.');
+    await this.api('renegotiate', { sessionDescription: toPayload(this.peerConnection.localDescription) });
+  }
+
+  private async subscribeOnce(participantId: string, allowSessionRetry: boolean): Promise<void> {
     const previous = this.currentlySubscribedParticipantId;
     if (previous && previous !== participantId) {
       if (DEV) console.log('[CLOUDFLARE][SWITCH_TARGET]', { previousParticipantId: previous, nextParticipantId: participantId, generation: this.subscriptionGeneration + 1 });
@@ -272,12 +295,7 @@ export class CloudflareRealtimeService {
         return;
       }
       this.remoteMids = result.remoteMids || [];
-      await this.peerConnection.setRemoteDescription(result.sessionDescription);
-      const answer = await this.peerConnection.createAnswer();
-      await this.peerConnection.setLocalDescription(answer);
-      await waitForIceGathering(this.peerConnection);
-      if (!this.peerConnection.localDescription) throw new Error('Resposta WebRTC local ausente.');
-      await this.api('renegotiate', { sessionDescription: toPayload(this.peerConnection.localDescription) });
+      await this.applyRemoteOffer(result.sessionDescription);
       this.clearSubscriptionTimeout();
       this.subscriptionTimeout = setTimeout(() => {
         void this.getInboundMediaStats().then((stats) => {
@@ -288,6 +306,10 @@ export class CloudflareRealtimeService {
         }).catch((error) => this.callbacks?.onError(error instanceof Error ? error : new Error(String(error))));
       }, 5_000);
     } catch (error) {
+      if (allowSessionRetry && error instanceof RealtimeApiError && error.code === 'CLOUDFLARE_SDP_MISSING') {
+        await this.discardMediaSession('missing-sdp');
+        return this.subscribeOnce(participantId, false);
+      }
       if (generation === this.subscriptionGeneration) {
         await this.api('unsubscribe').catch(() => undefined);
         this.currentlySubscribedParticipantId = null;
@@ -303,7 +325,11 @@ export class CloudflareRealtimeService {
     if (DEV) console.log('[CLOUDFLARE][UNSUBSCRIBE_REQUEST]', { participantId, sessionId: this.sessionId, generation: this.subscriptionGeneration, reason });
     this.clearSubscriptionTimeout();
     if (participantId === this.currentlySubscribedParticipantId) {
-      await this.api('unsubscribe').catch((error) => { if (DEV) console.warn('[CLOUDFLARE][UNSUBSCRIBE_FAILED]', error); });
+      const result = await this.api<{ sessionDescription?: SessionDescriptionPayload }>('unsubscribe').catch((error) => {
+        if (DEV) console.warn('[CLOUDFLARE][UNSUBSCRIBE_FAILED]', error);
+        return null;
+      });
+      if (result?.sessionDescription) await this.applyRemoteOffer(result.sessionDescription);
     }
     const stream = this.remoteStreams.get(participantId);
     const removedVideoTracks = stream?.getVideoTracks().length || 0;
@@ -328,7 +354,8 @@ export class CloudflareRealtimeService {
   async unpublishAllTracks(): Promise<void> {
     if (!this.localStream) return;
     if (DEV) console.log('[CLOUDFLARE][STOP_PUBLISH_REQUEST]', { participantId: this.participantId, sessionId: this.sessionId, watchingParticipantId: this.currentlySubscribedParticipantId });
-    await this.api('unpublish');
+    const result = await this.api<{ sessionDescription?: SessionDescriptionPayload }>('unpublish');
+    if (result.sessionDescription) await this.applyRemoteOffer(result.sessionDescription);
     if (this.peerConnection) {
       for (const sender of this.peerConnection.getSenders()) {
         if (sender.track && this.localStream.getTracks().some((track) => track.id === sender.track?.id)) {

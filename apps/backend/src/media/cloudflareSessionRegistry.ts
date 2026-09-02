@@ -27,6 +27,7 @@ class CloudflareSessionRegistry {
   private readonly sessions = new Map<string, ParticipantMediaSession>();
   private readonly streams = new Map<string, ActiveCloudflareStream>();
   private readonly subscriptions = new Map<string, ActiveSubscription>();
+  private readonly pendingSubscriptions = new Set<string>();
 
   getStats(): { sessions: number; streams: number; subscriptions: number } {
     return {
@@ -75,7 +76,18 @@ class CloudflareSessionRegistry {
   }
 
   setSubscription(subscription: ActiveSubscription): void {
+    this.pendingSubscriptions.delete(subscription.viewerParticipantId);
     this.subscriptions.set(subscription.viewerParticipantId, subscription);
+  }
+
+  beginSubscription(viewerParticipantId: string): boolean {
+    if (this.subscriptions.has(viewerParticipantId) || this.pendingSubscriptions.has(viewerParticipantId)) return false;
+    this.pendingSubscriptions.add(viewerParticipantId);
+    return true;
+  }
+
+  endPendingSubscription(viewerParticipantId: string): void {
+    this.pendingSubscriptions.delete(viewerParticipantId);
   }
 
   getSubscription(viewerParticipantId: string): ActiveSubscription | undefined {
@@ -83,6 +95,7 @@ class CloudflareSessionRegistry {
   }
 
   removeSubscription(viewerParticipantId: string): void {
+    this.pendingSubscriptions.delete(viewerParticipantId);
     this.subscriptions.delete(viewerParticipantId);
   }
 
@@ -97,6 +110,7 @@ class CloudflareSessionRegistry {
     this.sessions.delete(participantId);
     this.streams.delete(participantId);
     this.subscriptions.delete(participantId);
+    this.pendingSubscriptions.delete(participantId);
     for (const [viewerId, subscription] of this.subscriptions) {
       if (subscription.targetParticipantId === participantId) this.subscriptions.delete(viewerId);
     }
@@ -106,6 +120,7 @@ class CloudflareSessionRegistry {
     this.sessions.clear();
     this.streams.clear();
     this.subscriptions.clear();
+    this.pendingSubscriptions.clear();
   }
 }
 

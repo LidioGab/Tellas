@@ -89,6 +89,21 @@ function ownedSession(participantId: string, roomId: string) {
 }
 
 export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareRealtimeApi): void {
+  const sessionOperations = new Map<string, Promise<void>>();
+  const runSessionOperation = async <T>(sessionId: string, operation: () => Promise<T>): Promise<T> => {
+    const previous = sessionOperations.get(sessionId) || Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    sessionOperations.set(sessionId, current);
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (sessionOperations.get(sessionId) === current) sessionOperations.delete(sessionId);
+    }
+  };
+
   app.post('/api/realtime/session', async (request, reply) => {
     const auth = await authenticate(request, reply);
     if (!auth) return;
@@ -166,10 +181,10 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     const trackNames = new Map<string, string>();
     for (const track of tracks) trackNames.set(track.mid, crypto.randomUUID());
     try {
-      const result = await client.addTracks(mediaSession.cloudflareSessionId, {
-        sessionDescription: request.body.sessionDescription,
+      const result = await runSessionOperation(mediaSession.cloudflareSessionId, () => client.addTracks(mediaSession.cloudflareSessionId, {
+        sessionDescription: request.body.sessionDescription as CloudflareSessionDescription,
         tracks: tracks.map((track) => ({ location: 'local', mid: track.mid, trackName: trackNames.get(track.mid), kind: track.kind })),
-      });
+      }));
       if (!result.sessionDescription) throw new CloudflareRealtimeError('Resposta SDP ausente.', 502, 'CLOUDFLARE_SDP_MISSING');
       const failed = result.tracks?.find((track) => track.errorCode);
       if (failed) throw new CloudflareRealtimeError(failed.errorDescription || 'Falha ao publicar track.', 502, failed.errorCode || 'TRACK_PUBLISH_FAILED');
@@ -226,8 +241,8 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
       devLog('AUTHORIZATION_REJECTED', { reason: targetStream && !sameRoom ? 'CROSS_ROOM' : 'TARGET_NOT_STREAMING', participantId: auth.session.participantId, targetParticipantId });
       return reply.status(403).send({ error: 'Transmissão alvo indisponível nesta sala.', code: 'TARGET_STREAM_FORBIDDEN' });
     }
-    if (cloudflareSessionRegistry.getSubscription(auth.session.participantId)) {
-      return reply.status(409).send({ error: 'Encerre a subscription atual antes de trocar.', code: 'SUBSCRIPTION_ALREADY_ACTIVE' });
+    if (!cloudflareSessionRegistry.beginSubscription(auth.session.participantId)) {
+      return reply.status(409).send({ error: 'Já existe uma subscription ativa ou em andamento.', code: 'SUBSCRIPTION_ALREADY_ACTIVE' });
     }
 
     const remoteTracks = [
@@ -249,8 +264,14 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
         kind: track.kind,
         trackId: track.trackName,
       });
-      const result = await client.addTracks(viewerSession.cloudflareSessionId, { tracks: remoteTracks });
-      if (!result.sessionDescription) throw new CloudflareRealtimeError('Oferta SDP ausente.', 502, 'CLOUDFLARE_SDP_MISSING');
+      const result = await runSessionOperation(viewerSession.cloudflareSessionId, () => client.addTracks(viewerSession.cloudflareSessionId, { tracks: remoteTracks }));
+      if (!result.sessionDescription) {
+        const createdMids = (result.tracks || []).map((track) => track.mid).filter((mid): mid is string => Boolean(mid));
+        if (createdMids.length > 0) {
+          await runSessionOperation(viewerSession.cloudflareSessionId, () => client.closeTracks(viewerSession.cloudflareSessionId, createdMids)).catch(() => undefined);
+        }
+        throw new CloudflareRealtimeError('Oferta SDP ausente.', 502, 'CLOUDFLARE_SDP_MISSING');
+      }
       const failed = result.tracks?.find((track) => track.errorCode);
       if (failed) throw new CloudflareRealtimeError(failed.errorDescription || 'Falha ao receber track.', 502, failed.errorCode || 'TRACK_SUBSCRIBE_FAILED');
       const remoteMids = (result.tracks || []).map((track) => track.mid).filter((mid): mid is string => Boolean(mid));
@@ -259,6 +280,8 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     } catch (error) {
       request.log.error({ err: error }, 'Cloudflare subscribe failed');
       return sendCloudflareError(reply, error);
+    } finally {
+      cloudflareSessionRegistry.endPendingSubscription(auth.session.participantId);
     }
   });
 
@@ -273,7 +296,7 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
       return reply.status(400).send({ error: 'Resposta SDP inválida.', code: 'INVALID_SESSION_DESCRIPTION' });
     }
     try {
-      await client.renegotiate(mediaSession.cloudflareSessionId, request.body.sessionDescription);
+      await runSessionOperation(mediaSession.cloudflareSessionId, () => client.renegotiate(mediaSession.cloudflareSessionId, request.body.sessionDescription as CloudflareSessionDescription));
       return reply.send({ success: true });
     } catch (error) {
       return sendCloudflareError(reply, error);
@@ -295,7 +318,7 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
         mid,
         kind: index === 0 ? 'video' : 'audio',
       }));
-      await client.closeTracks(mediaSession.cloudflareSessionId, subscription.remoteMids);
+      const result = await runSessionOperation(mediaSession.cloudflareSessionId, () => client.closeTracks(mediaSession.cloudflareSessionId, subscription.remoteMids));
       subscription.remoteMids.forEach((mid, index) => devLog('REMOTE_TRACK_CLOSED', {
         targetParticipantId: subscription.targetParticipantId,
         kind: index === 0 ? 'video' : 'audio',
@@ -304,7 +327,7 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
         elapsedMs: Math.round(performance.now() - startedAt),
       }));
       cloudflareSessionRegistry.removeSubscription(auth.session.participantId);
-      return reply.send({ success: true });
+      return reply.send({ success: true, sessionDescription: result.sessionDescription });
     } catch (error) {
       return sendCloudflareError(reply, error);
     }
@@ -319,11 +342,11 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     try {
       devLog('LOCAL_TRACK_CLOSE_REQUEST', { kind: 'video', trackId: stream.videoTrackId, mid: stream.videoMid });
       if (stream.audioMid) devLog('LOCAL_TRACK_CLOSE_REQUEST', { kind: 'audio', trackId: stream.audioTrackId, mid: stream.audioMid });
-      await client.closeTracks(mediaSession.cloudflareSessionId, [stream.videoMid, ...(stream.audioMid ? [stream.audioMid] : [])]);
+      const result = await runSessionOperation(mediaSession.cloudflareSessionId, () => client.closeTracks(mediaSession.cloudflareSessionId, [stream.videoMid, ...(stream.audioMid ? [stream.audioMid] : [])]));
       devLog('LOCAL_TRACK_CLOSED', { kind: 'video', trackId: stream.videoTrackId, mid: stream.videoMid });
       if (stream.audioMid) devLog('LOCAL_TRACK_CLOSED', { kind: 'audio', trackId: stream.audioTrackId, mid: stream.audioMid });
       cloudflareSessionRegistry.removeStream(auth.session.participantId, 'explicit-cleanup');
-      return reply.send({ success: true });
+      return reply.send({ success: true, sessionDescription: result.sessionDescription });
     } catch (error) {
       return sendCloudflareError(reply, error);
     }
@@ -338,7 +361,7 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
       const subscription = cloudflareSessionRegistry.getSubscription(auth.session.participantId);
       const mids = [...(stream ? [stream.videoMid, ...(stream.audioMid ? [stream.audioMid] : [])] : []), ...(subscription?.remoteMids || [])];
       try {
-        await client.closeTracks(mediaSession.cloudflareSessionId, mids);
+        await runSessionOperation(mediaSession.cloudflareSessionId, () => client.closeTracks(mediaSession.cloudflareSessionId, mids));
       } catch (error) {
         request.log.warn({ err: error }, 'Cloudflare disconnect cleanup failed');
       }
