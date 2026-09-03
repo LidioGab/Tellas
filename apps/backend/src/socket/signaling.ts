@@ -151,6 +151,52 @@ export function getPublicRoomState(roomId: string): (RoomState & { isLocked?: bo
   };
 }
 
+function memberList(room: ExtendedRoomState): MemberInfo[] {
+  return Array.from(room.members.values()).map((member) => ({
+    participantId: member.participantId,
+    identity: member.identity,
+    role: member.role,
+    canPublish: member.canPublish,
+    isHost: member.role === 'host' && member.participantId === room.hostParticipantId,
+    socketId: member.currentSocketId || undefined,
+  }));
+}
+
+async function promoteNextHost(io: SocketIOServer, room: ExtendedRoomState, previousHostParticipantId: string): Promise<string | null> {
+  const candidates = Array.from(room.members.values());
+  const nextHost = candidates.find((member) => member.currentSocketId) || candidates[0];
+  if (!nextHost) {
+    room.hostParticipantId = null;
+    return null;
+  }
+
+  for (const member of candidates) member.role = member.participantId === nextHost.participantId ? 'host' : 'participant';
+  room.hostParticipantId = nextHost.participantId;
+
+  if (nextHost.currentSocketId) {
+    const sessionToken = await createSessionToken({
+      roomId: room.roomId,
+      participantId: nextHost.participantId,
+      sessionRole: 'host',
+      canPublish: nextHost.canPublish,
+    });
+    io.to(nextHost.currentSocketId).emit('role-updated', {
+      roomId: room.roomId,
+      role: 'host',
+      isHost: true,
+      sessionToken,
+    });
+  }
+
+  io.to(room.roomId).emit('host-transferred', {
+    roomId: room.roomId,
+    previousHostParticipantId,
+    newHostParticipantId: nextHost.participantId,
+  });
+  console.log(`[Room] Host automatically transferred in ${room.roomId}: ${previousHostParticipantId} -> ${nextHost.participantId}`);
+  return nextHost.participantId;
+}
+
 
 
 /**
@@ -383,6 +429,12 @@ export function setupSignaling(io: SocketIOServer) {
             });
 
             const isHostActual = existingMember.role === 'host' && existingMember.participantId === room.hostParticipantId;
+            const refreshedSessionToken = await createSessionToken({
+              roomId: cleanRoomId,
+              participantId: existingMember.participantId,
+              sessionRole: existingMember.role,
+              canPublish: existingMember.canPublish,
+            });
 
             const memberList: MemberInfo[] = Array.from(room.members.values()).map((m) => ({
               participantId: m.participantId,
@@ -409,7 +461,7 @@ export function setupSignaling(io: SocketIOServer) {
                 success: true,
                 roomId: cleanRoomId,
                 participantId: existingMember.participantId,
-                sessionToken: payload.sessionToken,
+                sessionToken: refreshedSessionToken,
                 sessionRole: existingMember.role,
                 isHost: isHostActual,
                 isLocked: room.isLocked,
@@ -954,7 +1006,7 @@ export function setupSignaling(io: SocketIOServer) {
 
     socket.on('leave-room', ({ roomId }: { roomId: string }) => {
       if (roomId) {
-        handleExplicitLeave(socket, roomId.trim().toUpperCase());
+        void handleExplicitLeave(io, socket, roomId.trim().toUpperCase());
       }
     });
 
@@ -963,7 +1015,7 @@ export function setupSignaling(io: SocketIOServer) {
     socket.on('disconnect', (reason) => {
       console.log(`[Socket] Disconnected: ${socket.id} (reason: ${reason})`);
       rooms.forEach((_room, roomId) => {
-        handleInvoluntaryDisconnect(socket, roomId);
+        handleInvoluntaryDisconnect(io, socket, roomId);
       });
     });
   });
@@ -972,7 +1024,7 @@ export function setupSignaling(io: SocketIOServer) {
 /**
  * Handles an explicit leave-room action from the client (immediate cleanup).
  */
-function handleExplicitLeave(socket: Socket, roomId: string) {
+async function handleExplicitLeave(io: SocketIOServer, socket: Socket, roomId: string) {
   const room = rooms.get(roomId);
   if (!room) return;
 
@@ -1004,33 +1056,17 @@ function handleExplicitLeave(socket: Socket, roomId: string) {
   room.socketToParticipant.delete(socket.id);
   room.members.delete(participantId);
 
-  socket.to(roomId).emit('user-left', {
-    socketId: socket.id,
-    participantId,
-  });
-
-  const remainingMembers: MemberInfo[] = Array.from(room.members.values()).map((m) => ({
-    participantId: m.participantId,
-    identity: m.identity,
-    role: m.role,
-    canPublish: m.canPublish,
-    isHost: m.role === 'host' && m.participantId === room.hostParticipantId,
-    socketId: m.currentSocketId || undefined,
-  }));
-  socket.to(roomId).emit('room-members-updated', remainingMembers);
-
-  socket.leave(roomId);
-
-
   if (room.members.size === 0) {
     rooms.delete(roomId);
     logInstanceEvent('ROOM_DELETED', { operation: 'leave-room', roomId, participantId, roomCount: rooms.size });
     console.log(`[Room] Explicit leave: cleaned up empty room ${roomId}`);
   } else if (room.hostParticipantId === participantId) {
-    // Security: Host authority is a security principal and is NEVER automatically transferred.
-    room.hostParticipantId = null;
-    console.log(`[Room] Host ${participantId} left ${roomId}. Host authority unassigned (no automatic promotion).`);
+    await promoteNextHost(io, room, participantId);
   }
+
+  socket.to(roomId).emit('user-left', { socketId: socket.id, participantId });
+  socket.to(roomId).emit('room-members-updated', memberList(room));
+  socket.leave(roomId);
 }
 
 
@@ -1038,7 +1074,7 @@ function handleExplicitLeave(socket: Socket, roomId: string) {
 /**
  * Handles an involuntary disconnect with a grace period timer to allow reconnects.
  */
-function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
+function handleInvoluntaryDisconnect(io: SocketIOServer, socket: Socket, roomId: string) {
   const room = rooms.get(roomId);
   if (!room) return;
 
@@ -1071,7 +1107,7 @@ function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
   );
 
   // 3. Start grace timer before removing membership and media state
-  member.disconnectTimer = setTimeout(() => {
+  member.disconnectTimer = setTimeout(async () => {
     // Grace period expired without reconnect
     const currentRoom = rooms.get(roomId);
     if (!currentRoom) return;
@@ -1087,18 +1123,6 @@ function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
       currentRoom.activeStreamers.delete(participantId);
       currentRoom.members.delete(participantId);
       cloudflareSessionRegistry.removeParticipant(participantId, 'disconnect');
-      socket.to(roomId).emit('user-left', {
-        socketId: socket.id,
-        participantId,
-      });
-      socket.to(roomId).emit('room-members-updated', Array.from(currentRoom.members.values()).map((m) => ({
-        participantId: m.participantId,
-        identity: m.identity,
-        role: m.role,
-        canPublish: m.canPublish,
-        isHost: m.role === 'host' && m.participantId === currentRoom.hostParticipantId,
-        socketId: m.currentSocketId || undefined,
-      })));
       if (process.env.NODE_ENV !== 'production') console.log('[CLOUDFLARE][PARTICIPANT_CLEANUP_COMPLETE]', { participantId, roomId });
       logInstanceEvent('PARTICIPANT_FINAL_CLEANUP', {
         operation: 'disconnect-grace-expired',
@@ -1118,10 +1142,10 @@ function handleInvoluntaryDisconnect(socket: Socket, roomId: string) {
         });
         console.log(`[Room] Cleaned up empty room ${roomId} after grace expiration`);
       } else if (currentRoom.hostParticipantId === participantId) {
-        // Security: Host authority is a security principal and is NEVER automatically transferred.
-        currentRoom.hostParticipantId = null;
-        console.log(`[Room] Host grace period expired in ${roomId}. Host authority unassigned (no automatic promotion).`);
+        await promoteNextHost(io, currentRoom, participantId);
       }
+      socket.to(roomId).emit('user-left', { socketId: socket.id, participantId });
+      socket.to(roomId).emit('room-members-updated', memberList(currentRoom));
     }
   }, ROOM_RECONNECT_GRACE_MS);
 
