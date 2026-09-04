@@ -53,13 +53,14 @@ export interface VideoQualityPreset {
   height: number;
   frameRate: number;
   maxBitrate: number; // kbps
+  contentMode: 'detail' | 'motion';
 }
 
 export const VIDEO_QUALITY_PRESETS: Record<string, VideoQualityPreset> = {
-  '720p30': { label: '720p 30fps', width: 1280, height: 720, frameRate: 30, maxBitrate: 2500 },
-  '720p60': { label: '720p 60fps', width: 1280, height: 720, frameRate: 60, maxBitrate: 4000 },
-  '1080p30': { label: '1080p 30fps', width: 1920, height: 1080, frameRate: 30, maxBitrate: 4500 },
-  '1080p60': { label: '1080p 60fps', width: 1920, height: 1080, frameRate: 60, maxBitrate: 6000 },
+  '720p30': { label: '720p 30fps', width: 1280, height: 720, frameRate: 30, maxBitrate: 3000, contentMode: 'detail' },
+  '720p60': { label: '720p 60fps', width: 1280, height: 720, frameRate: 60, maxBitrate: 5000, contentMode: 'motion' },
+  '1080p30': { label: '1080p 30fps', width: 1920, height: 1080, frameRate: 30, maxBitrate: 6000, contentMode: 'detail' },
+  '1080p60': { label: '1080p 60fps', width: 1920, height: 1080, frameRate: 60, maxBitrate: 8000, contentMode: 'motion' },
 };
 
 // ─── Socket.IO Events (Room Management Only — no WebRTC signaling) ──────────

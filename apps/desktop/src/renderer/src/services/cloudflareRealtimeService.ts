@@ -1,3 +1,6 @@
+import { VIDEO_QUALITY_PRESETS, type VideoQualityPreset } from '@stream-app/shared';
+import { applyVideoEncodingPolicy } from '../video/videoEncodingPolicy';
+
 export interface RemoteStreamInfo {
   participantId: string;
   displayName: string;
@@ -110,6 +113,7 @@ export class CloudflareRealtimeService {
   private participantId: string | null = null;
   private roomId: string | null = null;
   private reconnectAttempt = 0;
+  private currentVideoPreset: VideoQualityPreset = VIDEO_QUALITY_PRESETS['1080p30'];
   private readonly backendUrl = getBackendUrl();
 
   setCallbacks(callbacks: CloudflareRealtimeCallbacks): void {
@@ -195,7 +199,7 @@ export class CloudflareRealtimeService {
     this.peerConnection = peerConnection;
   }
 
-  async publishStream(stream: MediaStream): Promise<void> {
+  async publishStream(stream: MediaStream, preset?: VideoQualityPreset): Promise<void> {
     await this.connect();
     if (!this.peerConnection) throw new Error('PeerConnection Cloudflare indisponível.');
     const videoTracks = stream.getVideoTracks();
@@ -206,6 +210,9 @@ export class CloudflareRealtimeService {
     }
     const senders = [...videoTracks, ...audioTracks].map((track) => this.peerConnection!.addTrack(track, stream));
     try {
+      if (preset) this.currentVideoPreset = preset;
+      const videoSender = senders.find((sender) => sender.track?.kind === 'video');
+      if (videoSender) await this.applyVideoPolicy(videoSender, videoTracks[0]);
       const offer = await this.peerConnection.createOffer();
       await this.peerConnection.setLocalDescription(offer);
       await waitForIceGathering(this.peerConnection);
@@ -231,7 +238,7 @@ export class CloudflareRealtimeService {
     }
   }
 
-  async replacePublishedVideoTrack(newTrack: MediaStreamTrack): Promise<MediaStreamTrack> {
+  async replacePublishedVideoTrack(newTrack: MediaStreamTrack, preset?: VideoQualityPreset): Promise<MediaStreamTrack> {
     if (!this.peerConnection || !this.localStream) {
       throw new Error('Publicação Cloudflare ativa não encontrada.');
     }
@@ -245,7 +252,9 @@ export class CloudflareRealtimeService {
       || this.peerConnection.getSenders().find((item) => item.track?.kind === 'video');
     if (!sender) throw new Error('Sender de vídeo ativo não encontrado.');
 
+    if (preset) this.currentVideoPreset = preset;
     await sender.replaceTrack(newTrack);
+    await this.applyVideoPolicy(sender, newTrack);
     this.localStream.removeTrack(currentTrack);
     this.localStream.addTrack(newTrack);
     return currentTrack;
@@ -440,6 +449,15 @@ export class CloudflareRealtimeService {
   private clearSubscriptionTimeout(): void {
     if (this.subscriptionTimeout) clearTimeout(this.subscriptionTimeout);
     this.subscriptionTimeout = null;
+  }
+
+  private async applyVideoPolicy(sender: RTCRtpSender, track: MediaStreamTrack): Promise<void> {
+    try {
+      await applyVideoEncodingPolicy(sender, track, this.currentVideoPreset);
+    } catch (error) {
+      // Keep publishing on Chromium versions that reject optional encoding parameters.
+      console.warn('[CLOUDFLARE] Video encoding policy could not be fully applied:', error);
+    }
   }
 
   async getInboundMediaStats(): Promise<{ participantId: string | null; videoBytesReceived: number; videoFramesDecoded: number; audioBytesReceived: number; videoTracks: number; audioTracks: number }> {

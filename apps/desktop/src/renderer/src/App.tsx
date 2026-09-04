@@ -180,6 +180,8 @@ export const App: React.FC = () => {
   const hasAnyRemoteStream = remoteStreams.size > 0;
   const hasAnyActiveStreamer = activeStreamers.size > 0;
   const selectedStreamParticipantIdRef = useRef<string | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const stoppingPublicationRef = useRef(false);
   const roomMembershipReadyRef = useRef(false);
   const roomRecoveryPromiseRef = useRef<Promise<void> | null>(null);
   const roomLossHandledRef = useRef(false);
@@ -219,7 +221,11 @@ export const App: React.FC = () => {
     roomLossHandledRef.current = true;
     roomMembershipReadyRef.current = false;
     audioCaptureManager.stop();
-    localStream?.getTracks().forEach((track) => track.stop());
+    localStreamRef.current?.getTracks().forEach((track) => {
+      track.onended = null;
+      track.stop();
+    });
+    localStreamRef.current = null;
     await cloudflareRealtimeService.disconnect();
     cloudflareRealtimeService.setSessionToken(null);
     cloudflareRealtimeService.setDiagnosticContext(null, null);
@@ -245,7 +251,7 @@ export const App: React.FC = () => {
     setStreamingIdentity(null);
     setWatchModalOpen(false);
     alert(message);
-  }, [localStream]);
+  }, []);
 
   const recoverRoomMembership = useCallback((): Promise<void> => {
     if (!isInRoom || !roomId) return Promise.resolve();
@@ -787,6 +793,19 @@ export const App: React.FC = () => {
   // ─── Streaming Actions ───────────────────────────────────────
 
   const stopCurrentPublication = async (): Promise<boolean> => {
+    const stream = localStreamRef.current;
+    if (!stream || stoppingPublicationRef.current) return true;
+    stoppingPublicationRef.current = true;
+
+    // Release browser capture immediately; network cleanup can finish afterward.
+    stream.getVideoTracks().forEach((track) => { track.onended = null; });
+    stream.getTracks().forEach((track) => track.stop());
+    audioCaptureManager.stop();
+    localStreamRef.current = null;
+    setLocalStream(null);
+    setIsStreaming(false);
+    setSelectedSource(null);
+
     try {
       await cloudflareRealtimeService.unpublishAllTracks();
       if (roomId) {
@@ -797,16 +816,10 @@ export const App: React.FC = () => {
       console.error('[App] Failed to stop Cloudflare publication:', error);
       alert(error instanceof Error ? error.message : 'Não foi possível encerrar a publicação na Cloudflare.');
       return false;
+    } finally {
+      stoppingPublicationRef.current = false;
     }
 
-    audioCaptureManager.stop();
-    if (localStream) {
-      localStream.getVideoTracks().forEach((track) => { track.onended = null; });
-      localStream.getTracks().forEach((track) => track.stop());
-      setLocalStream(null);
-    }
-    setIsStreaming(false);
-    setSelectedSource(null);
     return true;
   };
 
@@ -829,10 +842,13 @@ export const App: React.FC = () => {
         throw new Error('A nova fonte não forneceu vídeo.');
       }
       try {
-        const previousVideoTrack = await cloudflareRealtimeService.replacePublishedVideoTrack(newVideoTrack);
+        const preset = VIDEO_QUALITY_PRESETS[qualityPreset] || VIDEO_QUALITY_PRESETS['1080p30'];
+        const previousVideoTrack = await cloudflareRealtimeService.replacePublishedVideoTrack(newVideoTrack, preset);
         previousVideoTrack.onended = null;
         previousVideoTrack.stop();
-        setLocalStream(new MediaStream([newVideoTrack, ...localStream.getAudioTracks()]));
+        const replacementStream = new MediaStream([newVideoTrack, ...localStream.getAudioTracks()]);
+        localStreamRef.current = replacementStream;
+        setLocalStream(replacementStream);
         return;
       } catch (error) {
         videoStream.getTracks().forEach((track) => track.stop());
@@ -887,7 +903,10 @@ export const App: React.FC = () => {
 
       await runAtomicPublishLifecycle({
         reserve: () => emitStreamCommand('reserve-stream', roomId),
-        publish: () => cloudflareRealtimeService.publishStream(finalStream),
+        publish: () => cloudflareRealtimeService.publishStream(
+          finalStream,
+          VIDEO_QUALITY_PRESETS[qualityPreset] || VIDEO_QUALITY_PRESETS['1080p30'],
+        ),
         confirm: () => emitStreamCommand('confirm-stream', roomId),
         rollbackPublish: () => cloudflareRealtimeService.unpublishAllTracks(),
         releaseReservation: () => emitStreamCommand('release-stream-reservation', roomId),
@@ -902,6 +921,7 @@ export const App: React.FC = () => {
         finalAudioResult: audioTrack ? 'AUDIO_PUBLISHED' : 'VIDEO_ONLY'
       }, 'CLOUDFLARE');
 
+      localStreamRef.current = finalStream;
       setLocalStream(finalStream);
       setIsStreaming(true);
       setStreamingIdentity(identity);
@@ -917,6 +937,7 @@ export const App: React.FC = () => {
         alert(`Erro ao iniciar transmissão: ${err.message}`);
       }
       setIsStreaming(false);
+      localStreamRef.current = null;
       setLocalStream(null);
       if (finalStream) finalStream.getTracks().forEach((t) => t.stop());
     }
