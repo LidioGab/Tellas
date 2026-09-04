@@ -19,6 +19,13 @@ export interface MemberInfo {
   socketId?: string;
 }
 
+export interface StreamViewerInfo {
+  participantId: string;
+  identity: string;
+}
+
+export type StreamViewersByPublisher = Record<string, StreamViewerInfo[]>;
+
 export interface RoomState {
   roomId: string;
   hostId: string;
@@ -77,6 +84,7 @@ export interface SignalingEvents {
       sessionRole?: 'host' | 'participant';
       members?: MemberInfo[];
       activeStreamers?: string[];
+      streamViewers?: StreamViewersByPublisher;
       isLocked?: boolean;
       error?: string;
       code?: string;
@@ -94,6 +102,7 @@ export interface SignalingEvents {
       peers: string[];
       members?: MemberInfo[];
       activeStreamers?: string[];
+      streamViewers?: StreamViewersByPublisher;
       isLocked?: boolean;
       error?: string;
       code?: string;
@@ -130,6 +139,7 @@ export interface SignalingEvents {
   'room-members-updated': (members: MemberInfo[]) => void;
   'stream-started': (payload: { streamerSocketId: string; participantId?: string; identity?: string }) => void;
   'stream-stopped': (payload: { streamerSocketId: string; participantId?: string; identity?: string; remainingStreamersCount?: number }) => void;
+  'stream-viewers-updated': (payload: { streamerParticipantId: string; viewers: StreamViewerInfo[] }) => void;
 
   // Host Administrative Server → Client
   'kicked-from-room': (payload: { roomId: string; reason?: string }) => void;

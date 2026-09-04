@@ -1,6 +1,6 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import * as crypto from 'crypto';
-import { RoomState, MemberInfo } from '@stream-app/shared';
+import { RoomState, MemberInfo, type StreamViewersByPublisher } from '@stream-app/shared';
 import { createSessionToken, verifySessionToken } from '../auth/session';
 import { checkRateLimit } from '../security/rateLimiter';
 import { resolveClientIp } from '../security/ipResolver';
@@ -162,6 +162,16 @@ function memberList(room: ExtendedRoomState): MemberInfo[] {
   }));
 }
 
+function streamViewers(room: ExtendedRoomState): StreamViewersByPublisher {
+  return Object.fromEntries(Array.from(room.activeStreamers).map((streamerParticipantId) => [
+    streamerParticipantId,
+    cloudflareSessionRegistry.getViewerParticipantIds(streamerParticipantId)
+      .map((participantId) => room.members.get(participantId))
+      .filter((member): member is BackendMemberInfo => Boolean(member))
+      .map((member) => ({ participantId: member.participantId, identity: member.identity })),
+  ]));
+}
+
 async function promoteNextHost(io: SocketIOServer, room: ExtendedRoomState, previousHostParticipantId: string): Promise<string | null> {
   const candidates = Array.from(room.members.values());
   const nextHost = candidates.find((member) => member.currentSocketId) || candidates[0];
@@ -221,6 +231,13 @@ export function resetRoomStore(): void {
 // ─── Socket.IO Signaling & Room Management ──────────────────────────────────
 
 export function setupSignaling(io: SocketIOServer) {
+  cloudflareSessionRegistry.setSubscriptionChangeListener((roomId, streamerParticipantId) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+    const viewers = streamViewers(room)[streamerParticipantId] || [];
+    io.to(roomId).emit('stream-viewers-updated', { streamerParticipantId, viewers });
+  });
+
   io.on('connection', (socket: Socket) => {
     const clientIp = getSocketClientIp(socket);
     console.log(`[Socket] Connected: ${socket.id} (IP: ${clientIp})`);
@@ -307,6 +324,7 @@ export function setupSignaling(io: SocketIOServer) {
           sessionToken,
           sessionRole: 'host',
           isLocked: false,
+          streamViewers: {},
           members: [
             {
               participantId,
@@ -468,6 +486,7 @@ export function setupSignaling(io: SocketIOServer) {
                 peers: otherPeers,
                 members: memberList,
                 activeStreamers: Array.from(room.activeStreamers),
+                streamViewers: streamViewers(room),
               });
             }
             return;
@@ -570,6 +589,7 @@ export function setupSignaling(io: SocketIOServer) {
             peers: otherPeers,
             members: memberList,
             activeStreamers: Array.from(room.activeStreamers),
+            streamViewers: streamViewers(room),
           });
         }
 

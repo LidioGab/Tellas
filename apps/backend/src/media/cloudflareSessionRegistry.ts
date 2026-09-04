@@ -18,6 +18,7 @@ export interface ActiveCloudflareStream {
 export interface ActiveSubscription {
   viewerParticipantId: string;
   targetParticipantId: string;
+  roomId: string;
   remoteMids: string[];
 }
 
@@ -28,6 +29,17 @@ class CloudflareSessionRegistry {
   private readonly streams = new Map<string, ActiveCloudflareStream>();
   private readonly subscriptions = new Map<string, ActiveSubscription>();
   private readonly pendingSubscriptions = new Set<string>();
+  private subscriptionChangeListener: ((roomId: string, targetParticipantId: string) => void) | null = null;
+
+  setSubscriptionChangeListener(listener: ((roomId: string, targetParticipantId: string) => void) | null): void {
+    this.subscriptionChangeListener = listener;
+  }
+
+  getViewerParticipantIds(targetParticipantId: string): string[] {
+    return Array.from(this.subscriptions.values())
+      .filter((subscription) => subscription.targetParticipantId === targetParticipantId)
+      .map((subscription) => subscription.viewerParticipantId);
+  }
 
   getStats(): { sessions: number; streams: number; subscriptions: number } {
     return {
@@ -78,6 +90,7 @@ class CloudflareSessionRegistry {
   setSubscription(subscription: ActiveSubscription): void {
     this.pendingSubscriptions.delete(subscription.viewerParticipantId);
     this.subscriptions.set(subscription.viewerParticipantId, subscription);
+    this.subscriptionChangeListener?.(subscription.roomId, subscription.targetParticipantId);
   }
 
   beginSubscription(viewerParticipantId: string): boolean {
@@ -95,12 +108,17 @@ class CloudflareSessionRegistry {
   }
 
   removeSubscription(viewerParticipantId: string): void {
+    const subscription = this.subscriptions.get(viewerParticipantId);
     this.pendingSubscriptions.delete(viewerParticipantId);
     this.subscriptions.delete(viewerParticipantId);
+    if (subscription) this.subscriptionChangeListener?.(subscription.roomId, subscription.targetParticipantId);
   }
 
   removeParticipant(participantId: string, reason = 'disconnect'): void {
     const session = this.sessions.get(participantId);
+    const wasPublisher = this.streams.has(participantId);
+    const hadViewers = Array.from(this.subscriptions.values())
+      .some((subscription) => subscription.targetParticipantId === participantId);
     if (DEV && session) console.log('[CLOUDFLARE][SESSION_REGISTRY_DELETE]', {
       participantId,
       roomId: session.roomId,
@@ -109,10 +127,15 @@ class CloudflareSessionRegistry {
     });
     this.sessions.delete(participantId);
     this.streams.delete(participantId);
+    const ownSubscription = this.subscriptions.get(participantId);
     this.subscriptions.delete(participantId);
     this.pendingSubscriptions.delete(participantId);
     for (const [viewerId, subscription] of this.subscriptions) {
       if (subscription.targetParticipantId === participantId) this.subscriptions.delete(viewerId);
+    }
+    if (ownSubscription) this.subscriptionChangeListener?.(ownSubscription.roomId, ownSubscription.targetParticipantId);
+    if (session && (wasPublisher || hadViewers)) {
+      this.subscriptionChangeListener?.(session.roomId, participantId);
     }
   }
 

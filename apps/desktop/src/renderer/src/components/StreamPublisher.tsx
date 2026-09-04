@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Volume2, StopCircle, Settings, Maximize, Minimize } from 'lucide-react';
-import type { DesktopSource, VideoQualityPreset } from '@stream-app/shared';
+import type { DesktopSource, StreamViewerInfo, VideoQualityPreset } from '@stream-app/shared';
+import { ViewerPresence } from './ViewerPresence';
 
 interface StreamPublisherProps {
   source: DesktopSource | null;
@@ -9,6 +10,7 @@ interface StreamPublisherProps {
   streamerName?: string;
   onStopStream: () => void;
   onChangeSource: () => void;
+  viewers?: StreamViewerInfo[];
 }
 
 export const StreamPublisher: React.FC<StreamPublisherProps> = ({
@@ -17,7 +19,8 @@ export const StreamPublisher: React.FC<StreamPublisherProps> = ({
   qualityPreset,
   streamerName,
   onStopStream,
-  onChangeSource
+  onChangeSource,
+  viewers = [],
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoBoxRef = useRef<HTMLDivElement>(null);
@@ -86,6 +89,7 @@ export const StreamPublisher: React.FC<StreamPublisherProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          <ViewerPresence viewers={viewers} />
           <button
             onClick={onChangeSource}
             className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] text-xs font-medium text-[#9DA5B4] hover:text-[#F4F6F8] transition"

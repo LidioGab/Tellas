@@ -275,7 +275,12 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
       const failed = result.tracks?.find((track) => track.errorCode);
       if (failed) throw new CloudflareRealtimeError(failed.errorDescription || 'Falha ao receber track.', 502, failed.errorCode || 'TRACK_SUBSCRIBE_FAILED');
       const remoteMids = (result.tracks || []).map((track) => track.mid).filter((mid): mid is string => Boolean(mid));
-      cloudflareSessionRegistry.setSubscription({ viewerParticipantId: auth.session.participantId, targetParticipantId, remoteMids });
+      cloudflareSessionRegistry.setSubscription({
+        viewerParticipantId: auth.session.participantId,
+        targetParticipantId,
+        roomId: auth.session.roomId,
+        remoteMids,
+      });
       return reply.send({ sessionDescription: result.sessionDescription, remoteMids });
     } catch (error) {
       request.log.error({ err: error }, 'Cloudflare subscribe failed');

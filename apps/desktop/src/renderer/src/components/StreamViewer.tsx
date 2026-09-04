@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Volume2, VolumeX, Maximize, Minimize, Volume1, X } from 'lucide-react';
 import { useLayoutMode } from '../hooks/useLayoutMode';
+import type { StreamViewerInfo } from '@stream-app/shared';
+import { ViewerPresence } from './ViewerPresence';
 
 interface StreamViewerProps {
   remoteStream: MediaStream | null;
@@ -12,6 +14,7 @@ interface StreamViewerProps {
   isLoading?: boolean;
   errorMessage?: string | null;
   onFirstVideoFrame?: () => void;
+  viewers?: StreamViewerInfo[];
 }
 
 export const StreamViewer: React.FC<StreamViewerProps> = ({
@@ -21,6 +24,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
   isLoading = false,
   errorMessage = null,
   onFirstVideoFrame,
+  viewers = [],
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoBoxRef = useRef<HTMLDivElement>(null);
@@ -268,6 +272,7 @@ export const StreamViewer: React.FC<StreamViewerProps> = ({
                 <span className="w-1.5 h-1.5 rounded-full bg-[#F87171]"></span>
                 Ao vivo
               </span>
+              <ViewerPresence viewers={viewers} compact={isImmersive} />
             </div>
 
             {/* Discreet Close Button */}

@@ -11,7 +11,7 @@ import {
   resolveWebAudioPolicy,
   sanitizeMediaStreamForPolicy
 } from './audio/webCapturePolicy';
-import { DesktopSource, VIDEO_QUALITY_PRESETS, WindowsAudioEnvironment, AudioCaptureStrategy } from '@stream-app/shared';
+import { DesktopSource, VIDEO_QUALITY_PRESETS, WindowsAudioEnvironment, AudioCaptureStrategy, type StreamViewerInfo } from '@stream-app/shared';
 import { SourcePickerModal } from './components/SourcePickerModal';
 import { StreamPublisher } from './components/StreamPublisher';
 import { StreamViewer } from './components/StreamViewer';
@@ -150,6 +150,7 @@ export const App: React.FC = () => {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, RemoteStreamItem>>(new Map());
   const [activeStreamers, setActiveStreamers] = useState<Map<string, ActiveStreamerInfo>>(new Map());
+  const [streamViewers, setStreamViewers] = useState<Map<string, StreamViewerInfo[]>>(new Map());
   const [isStreamLoading, setIsStreamLoading] = useState<boolean>(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
@@ -243,6 +244,7 @@ export const App: React.FC = () => {
     setLocalStream(null);
     setRemoteStreams(new Map());
     setActiveStreamers(new Map());
+    setStreamViewers(new Map());
     setSelectedStreamParticipantId(null);
     setSelectedSource(null);
     setIsStreamLoading(false);
@@ -297,6 +299,7 @@ export const App: React.FC = () => {
           const member = recoveredMembers.find((item) => item.participantId === participantId);
           return [participantId, { participantId, displayName: member?.identity || 'Participante' }];
         })));
+        setStreamViewers(new Map(Object.entries(res.streamViewers || {}) as [string, StreamViewerInfo[]][]));
         roomLossHandledRef.current = false;
         roomMembershipReadyRef.current = true;
         resolve();
@@ -494,6 +497,11 @@ export const App: React.FC = () => {
           next.delete(participantId);
           return next;
         });
+        setStreamViewers((prev) => {
+          const next = new Map(prev);
+          next.delete(participantId);
+          return next;
+        });
         if (participantId === selectedStreamParticipantIdRef.current) {
           void cloudflareRealtimeService.unsubscribeFromParticipant(participantId, true, 'stream-stopped');
           setSelectedStreamParticipantId(null);
@@ -502,11 +510,17 @@ export const App: React.FC = () => {
         }
       } else {
         setActiveStreamers(new Map());
+        setStreamViewers(new Map());
+        setStreamViewers(new Map());
         void cloudflareRealtimeService.unsubscribeAll();
         setRemoteStreams(new Map());
         setStreamingIdentity(null);
         setWatchModalOpen(false);
       }
+    });
+
+    socket.on('stream-viewers-updated', ({ streamerParticipantId, viewers }: { streamerParticipantId: string; viewers: StreamViewerInfo[] }) => {
+      setStreamViewers((prev) => new Map(prev).set(streamerParticipantId, viewers));
     });
 
     // ─── Host Administrative Events ──────────────────────────────────
@@ -546,6 +560,7 @@ export const App: React.FC = () => {
       socket.off('room-members-updated');
       socket.off('stream-started');
       socket.off('stream-stopped');
+      socket.off('stream-viewers-updated');
       socket.off('kicked-from-room');
       socket.off('room-lock-status-changed');
       socket.off('role-updated');
@@ -718,6 +733,7 @@ export const App: React.FC = () => {
           const member = joinedMembers.find((item) => item.participantId === participantId);
           return [participantId, { participantId, displayName: member?.identity || 'Participante' }];
         })));
+        setStreamViewers(new Map(Object.entries(res.streamViewers || {}) as [string, StreamViewerInfo[]][]));
       } else {
         if (fromLastRoomShortcut && res.code === 'ROOM_NOT_FOUND') {
           forgetRoom(cleanRoomId);
@@ -774,6 +790,7 @@ export const App: React.FC = () => {
     setMembers([]);
     setRemoteStreams(new Map());
     setActiveStreamers(new Map());
+    setStreamViewers(new Map());
     setSelectedStreamParticipantId(null);
     setIsStreamLoading(false);
     setStreamError(null);
@@ -1285,6 +1302,7 @@ export const App: React.FC = () => {
                   streamerName={activeStreamEntry[1].displayName}
                   roomId={roomId}
                   memberCount={members.length}
+                  viewers={streamViewers.get(activeStreamEntry[0]) || []}
                   isLoading={isStreamLoading}
                   onFirstVideoFrame={handleFirstVideoFrame}
                 />
@@ -1352,6 +1370,7 @@ export const App: React.FC = () => {
                   streamerName={activeStreamEntry[1].displayName}
                   roomId={roomId}
                   memberCount={members.length}
+                  viewers={streamViewers.get(activeStreamEntry[0]) || []}
                   isLoading={isStreamLoading}
                   onFirstVideoFrame={handleFirstVideoFrame}
                 />
@@ -1685,6 +1704,7 @@ export const App: React.FC = () => {
                       localStream={localStream}
                       qualityPreset={currentPreset}
                       streamerName={userName}
+                      viewers={streamViewers.get(myParticipantId) || []}
                       onStopStream={handleStopStream}
                       onChangeSource={handleOpenSharePicker}
                     />
@@ -1761,6 +1781,7 @@ export const App: React.FC = () => {
               streamerName={activeStreamers.get(selectedStreamParticipantId)?.displayName || activeStreamEntry?.[1].displayName}
               roomId={roomId}
               memberCount={members.length}
+              viewers={streamViewers.get(selectedStreamParticipantId) || []}
               onClose={() => void handleStopWatch()}
               isLoading={isStreamLoading}
               errorMessage={streamError}
