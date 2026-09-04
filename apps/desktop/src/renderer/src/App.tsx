@@ -227,9 +227,6 @@ export const App: React.FC = () => {
       track.stop();
     });
     localStreamRef.current = null;
-    await cloudflareRealtimeService.disconnect();
-    cloudflareRealtimeService.setSessionToken(null);
-    cloudflareRealtimeService.setDiagnosticContext(null, null);
     try {
       sessionStorage.removeItem('tellas_session_token');
       sessionStorage.removeItem('tellas_session_room');
@@ -252,6 +249,10 @@ export const App: React.FC = () => {
     setIsStreaming(false);
     setStreamingIdentity(null);
     setWatchModalOpen(false);
+    await cloudflareRealtimeService.disconnect();
+    cloudflareRealtimeService.setSessionToken(null);
+    cloudflareRealtimeService.setDiagnosticContext(null, null);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     alert(message);
   }, []);
 
@@ -525,8 +526,7 @@ export const App: React.FC = () => {
 
     // ─── Host Administrative Events ──────────────────────────────────
     socket.on('kicked-from-room', ({ reason }: { reason?: string } = {}) => {
-      alert(reason || 'Você foi expulso da sala pelo host.');
-      handleLeaveRoom();
+      void resetLostRoom(reason || 'Você foi expulso da sala pelo host.');
     });
 
     socket.on('room-lock-status-changed', ({ isLocked }: { isLocked: boolean }) => {
@@ -566,7 +566,7 @@ export const App: React.FC = () => {
       socket.off('role-updated');
       socket.off('host-transferred');
     };
-  }, [roomId, isHost, getEffectiveIdentity, myParticipantId, resolveDisplayName]);
+  }, [roomId, isHost, getEffectiveIdentity, myParticipantId, resetLostRoom, resolveDisplayName]);
 
   // ─── Host Administrative Actions ───────────────────────────────────
 

@@ -380,7 +380,6 @@ export class CloudflareRealtimeService {
     this.intentionalClose = true;
     this.subscriptionGeneration++;
     this.clearSubscriptionTimeout();
-    await this.api('disconnect').catch(() => undefined);
     this.remoteStreams.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
     this.remoteStreams.clear();
     this.peerConnection?.close();
@@ -390,6 +389,7 @@ export class CloudflareRealtimeService {
     this.remoteMids = [];
     this.localStream = null;
     this.callbacks?.onConnectionStateChanged('closed');
+    await this.api('disconnect').catch(() => undefined);
   }
 
   private async recover(): Promise<void> {
