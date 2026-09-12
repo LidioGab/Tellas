@@ -44,6 +44,15 @@ export interface AudioCaptureStartResult {
   diagnosticLogPath?: string;
 }
 
+export interface NativeAudioFrame {
+  sequence: number;
+  capturedAtUs: number;
+  sampleRate: number;
+  channels: number;
+  frameCount: number;
+  samples: Float32Array;
+}
+
 export class DiscordAudioIsolationService extends EventEmitter {
   private isCapturing = false;
   private currentMode: 'NATIVE_PROCESS_LOOPBACK' | 'FALLBACK' | 'NONE' = 'NONE';
@@ -293,16 +302,17 @@ export class DiscordAudioIsolationService extends EventEmitter {
         });
       }
 
-      const started = nativeCapture.start(targetPid, (pcmBuffer: Float32Array) => {
+      const started = nativeCapture.start(targetPid, (frame: NativeAudioFrame) => {
         if (!this.firstNativeBufferLogged) {
           this.firstNativeBufferLogged = true;
           win10AudioLogger.logImmediate('MAIN', 'IPC', {
             firstNativeBufferReceived: true,
-            samples: pcmBuffer.length,
-            bytes: pcmBuffer.byteLength
+            sequence: frame.sequence,
+            samples: frame.samples.length,
+            bytes: frame.samples.byteLength
           });
         }
-        this.emit('data', pcmBuffer);
+        this.emit('data', frame);
       });
 
       if (started) {
@@ -381,6 +391,9 @@ export class DiscordAudioIsolationService extends EventEmitter {
 
     if (this.nativeInstance) {
       try {
+        if (typeof this.nativeInstance.getStats === 'function') {
+          win10AudioLogger.logImmediate('NATIVE', 'QUEUE_STATS', this.nativeInstance.getStats());
+        }
         this.nativeInstance.stop();
       } catch (_) { }
       this.nativeInstance = null;

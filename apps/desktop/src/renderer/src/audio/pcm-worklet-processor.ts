@@ -1,114 +1,125 @@
-/**
- * PCM AudioWorklet Processor
- * Runs inside the AudioWorklet thread. Receives Float32 PCM chunks
- * from the main thread via MessagePort and outputs them to the audio graph.
- * This is bundled as a separate script loaded via addModule().
- */
-
-class PcmWorkletProcessor extends AudioWorkletNode {
-  // This is the AudioWorkletProcessor definition (separate thread context)
-}
-
-// AudioWorkletProcessor runs in its own thread — declare as string to be loaded via Blob URL
+/** Low-latency bounded PCM ring buffer for a 48 kHz stereo WebRTC track. */
 export const PCM_WORKLET_CODE = /* js */`
 class PcmStreamProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this._buffer = [];
-    this._totalSamples = 0;
-    this._firstInputReported = false;
-    this._firstOutputReported = false;
+    this._channels = 2;
+    this._capacity = Math.round(sampleRate * this._channels * 0.2);
+    this._target = Math.round(sampleRate * this._channels * 0.06);
+    this._prime = Math.round(sampleRate * this._channels * 0.04);
+    this._emergency = Math.round(sampleRate * this._channels * 0.15);
+    this._ring = new Float32Array(this._capacity);
+    this._read = 0;
+    this._write = 0;
+    this._available = 0;
+    this._state = 'PRIMING';
     this._underflows = 0;
-    this._framesProcessed = 0;
-
-    this.port.postMessage({
-      type: 'diagnostic',
-      category: 'WORKLET_INIT',
-      data: { workletStarted: true }
-    });
-
-    // Listen for PCM data messages from the main thread
-    this.port.onmessage = (event) => {
-      const { data } = event;
-      if (data.type === 'pcm') {
-        if (!this._firstInputReported) {
-          this._firstInputReported = true;
-          this.port.postMessage({
-            type: 'diagnostic',
-            category: 'WORKLET_FIRST_INPUT',
-            data: {
-              firstInput: true,
-              samples: data.samples ? data.samples.length : 0
-            }
-          });
-        }
-        // data.samples is a Float32Array (stereo interleaved)
-        this._buffer.push(data.samples);
-        this._totalSamples += data.samples.length;
-      }
+    this._droppedSamples = 0;
+    this._emergencyResyncs = 0;
+    this._sequenceGaps = 0;
+    this._lastSequence = null;
+    this._quanta = 0;
+    this._driftDrops = 0;
+    this._driftCounter = 0;
+    this._lastReportFrame = 0;
+    this.port.onmessage = ({ data }) => {
+      if (data.type === 'reset') this._reset();
+      if (data.type === 'audio-frame' && data.samples) this._enqueue(data);
     };
+    this._report('WORKLET_INIT');
+  }
+
+  _reset() {
+    this._read = this._write = this._available = 0;
+    this._state = 'PRIMING';
+    this._lastSequence = null;
+  }
+
+  _drop(count) {
+    const aligned = Math.min(this._available, count - (count % this._channels));
+    this._read = (this._read + aligned) % this._capacity;
+    this._available -= aligned;
+    this._droppedSamples += aligned;
+  }
+
+  _enqueue(frame) {
+    if (this._lastSequence !== null && frame.sequence > this._lastSequence + 1) {
+      this._sequenceGaps += frame.sequence - this._lastSequence - 1;
+    }
+    this._lastSequence = frame.sequence;
+    const samples = frame.samples;
+    if (samples.length >= this._capacity) {
+      this._drop(this._available);
+      const start = samples.length - this._target;
+      for (let i = start; i < samples.length; i++) this._writeOne(samples[i]);
+      this._emergencyResyncs++;
+      return;
+    }
+    if (this._available + samples.length > this._emergency) {
+      this._drop(this._available - this._target + samples.length);
+      this._emergencyResyncs++;
+      this._state = 'RUNNING';
+    }
+    for (let i = 0; i < samples.length; i++) this._writeOne(samples[i]);
+  }
+
+  _writeOne(value) {
+    if (this._available === this._capacity) this._drop(this._channels);
+    this._ring[this._write] = value;
+    this._write = (this._write + 1) % this._capacity;
+    this._available++;
+  }
+
+  _report(category = 'WORKLET_STATS') {
+    this.port.postMessage({ type: 'diagnostic', category, data: {
+      state: this._state,
+      queuedMs: Math.round(this._available / this._channels / sampleRate * 1000),
+      underflows: this._underflows,
+      droppedSamples: this._droppedSamples,
+      emergencyResyncs: this._emergencyResyncs,
+      sequenceGaps: this._sequenceGaps,
+      driftDrops: this._driftDrops,
+      quanta: this._quanta
+    }});
   }
 
   process(inputs, outputs) {
     const output = outputs[0];
-    const leftChannel = output[0];
-    const rightChannel = output[1];
-
-    if (!leftChannel) return true;
-
-    const frameSize = leftChannel.length; // typically 128 samples
-    const needed = frameSize * 2; // stereo interleaved
-
-    if (this._totalSamples < needed) {
-      // Not enough data yet — output silence
-      this._underflows++;
-      leftChannel.fill(0);
-      if (rightChannel) rightChannel.fill(0);
-      return true;
-    }
-
-    if (!this._firstOutputReported) {
-      this._firstOutputReported = true;
-      this.port.postMessage({
-        type: 'diagnostic',
-        category: 'WORKLET_FIRST_OUTPUT',
-        data: {
-          firstOutput: true,
-          frameSize: frameSize
-        }
-      });
-    }
-
-    this._framesProcessed++;
-
-    // Pull samples from our queue
-    const combined = new Float32Array(needed);
-    let filled = 0;
-    while (filled < needed && this._buffer.length > 0) {
-      const chunk = this._buffer[0];
-      const toCopy = Math.min(chunk.length, needed - filled);
-      combined.set(chunk.subarray(0, toCopy), filled);
-      filled += toCopy;
-
-      if (toCopy < chunk.length) {
-        this._buffer[0] = chunk.subarray(toCopy);
-      } else {
-        this._buffer.shift();
+    const left = output[0];
+    const right = output[1];
+    if (!left) return true;
+    const needed = left.length * this._channels;
+    if (this._state === 'PRIMING' && this._available >= this._prime) this._state = 'RUNNING';
+    if (this._state !== 'RUNNING' || this._available < needed) {
+      left.fill(0);
+      if (right) right.fill(0);
+      if (this._state === 'RUNNING') {
+        this._underflows++;
+        this._state = 'PRIMING';
       }
-      this._totalSamples -= toCopy;
-    }
-
-    // De-interleave stereo: L, R, L, R... → separate channels
-    for (let i = 0; i < frameSize; i++) {
-      leftChannel[i] = combined[i * 2] || 0;
-      if (rightChannel) {
-        rightChannel[i] = combined[i * 2 + 1] || 0;
+    } else {
+      // Gently correct positive clock drift above 100 ms (about +0.2%).
+      if (this._available > sampleRate * this._channels * 0.1 && ++this._driftCounter >= 4) {
+        this._drop(this._channels);
+        this._driftDrops++;
+        this._driftCounter = 0;
       }
+      for (let i = 0; i < left.length; i++) {
+        left[i] = this._ring[this._read];
+        this._read = (this._read + 1) % this._capacity;
+        right[i] = this._ring[this._read];
+        this._read = (this._read + 1) % this._capacity;
+      }
+      this._available -= needed;
+      this._quanta++;
+      if (this._state === 'RECOVERY') this._state = 'RUNNING';
     }
-
-    return true; // keep processor alive
+    if (currentFrame - this._lastReportFrame >= sampleRate) {
+      this._lastReportFrame = currentFrame;
+      this._report();
+    }
+    return true;
   }
 }
-
 registerProcessor('pcm-stream-processor', PcmStreamProcessor);
 `;

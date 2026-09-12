@@ -55,7 +55,8 @@ function createWindow() {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      backgroundThrottling: false
     }
   });
 
@@ -114,16 +115,17 @@ import { win10AudioLogger } from './Win10AudioDiagnosticLogger';
 let firstIpcSentLogged = false;
 
 // Setup forwarder from Discord Audio Isolation Service to Renderer
-discordAudioIsolationService.on('data', (buffer: Float32Array) => {
+discordAudioIsolationService.on('data', (frame) => {
   if (!firstIpcSentLogged) {
     firstIpcSentLogged = true;
     win10AudioLogger.logImmediate('MAIN', 'IPC', {
       audioBufferIpcSent: true,
-      samples: buffer.length
+      sequence: frame.sequence,
+      samples: frame.samples.length
     });
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('audio-buffer', buffer);
+    mainWindow.webContents.send('audio-buffer', frame);
   }
 });
 

@@ -460,12 +460,16 @@ export class CloudflareRealtimeService {
     }
   }
 
-  async getInboundMediaStats(): Promise<{ participantId: string | null; videoBytesReceived: number; videoFramesDecoded: number; audioBytesReceived: number; videoTracks: number; audioTracks: number }> {
+  async getInboundMediaStats(): Promise<{ participantId: string | null; videoBytesReceived: number; videoFramesDecoded: number; audioBytesReceived: number; videoTracks: number; audioTracks: number; audioPacketsLost: number; audioJitterMs: number; audioJitterBufferMs: number; concealedSamples: number }> {
     let videoBytesReceived = 0;
     let videoFramesDecoded = 0;
     let audioBytesReceived = 0;
     let videoTracks = 0;
     let audioTracks = 0;
+    let audioPacketsLost = 0;
+    let audioJitterMs = 0;
+    let audioJitterBufferMs = 0;
+    let concealedSamples = 0;
     if (this.peerConnection) {
       const report = await this.peerConnection.getStats();
       report.forEach((stat) => {
@@ -477,10 +481,16 @@ export class CloudflareRealtimeService {
         } else if (stat.kind === 'audio' || stat.mediaType === 'audio') {
           audioTracks++;
           audioBytesReceived += stat.bytesReceived;
+          audioPacketsLost += typeof stat.packetsLost === 'number' ? stat.packetsLost : 0;
+          audioJitterMs = Math.max(audioJitterMs, typeof stat.jitter === 'number' ? stat.jitter * 1000 : 0);
+          concealedSamples += typeof stat.concealedSamples === 'number' ? stat.concealedSamples : 0;
+          if (typeof stat.jitterBufferDelay === 'number' && typeof stat.jitterBufferEmittedCount === 'number' && stat.jitterBufferEmittedCount > 0) {
+            audioJitterBufferMs = Math.max(audioJitterBufferMs, stat.jitterBufferDelay / stat.jitterBufferEmittedCount * 1000);
+          }
         }
       });
     }
-    return { participantId: this.currentlySubscribedParticipantId, videoBytesReceived, videoFramesDecoded, audioBytesReceived, videoTracks, audioTracks };
+    return { participantId: this.currentlySubscribedParticipantId, videoBytesReceived, videoFramesDecoded, audioBytesReceived, videoTracks, audioTracks, audioPacketsLost, audioJitterMs, audioJitterBufferMs, concealedSamples };
   }
 
   get connected(): boolean {

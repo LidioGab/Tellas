@@ -13,6 +13,15 @@ export interface AudioFormat {
   chunkDurationMs: number;
 }
 
+export interface AudioFrame {
+  sequence: number;
+  capturedAtUs: number;
+  sampleRate: number;
+  channels: number;
+  frameCount: number;
+  samples: Float32Array;
+}
+
 export interface ElectronAPI {
   // Phase 1 — Screen Capture Sources
   getSources: () => Promise<DesktopSource[]>;
@@ -30,7 +39,7 @@ export interface ElectronAPI {
     error?: string;
   }>;
   stopAudioCapture: () => Promise<{ success: boolean; error?: string }>;
-  onAudioBuffer: (callback: (buffer: Float32Array) => void) => () => void;
+  onAudioBuffer: (callback: (frame: AudioFrame) => void) => () => void;
   onAudioCaptureError: (callback: (error: string) => void) => () => void;
   sendAudioDiagnosticEvent?: (category: string, data: unknown, layer?: string) => void;
   getAudioDiagnosticPath?: () => Promise<{ path: string | null; dir: string }>;

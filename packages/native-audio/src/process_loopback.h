@@ -19,7 +19,7 @@ using Microsoft::WRL::RuntimeClassFlags;
 using Microsoft::WRL::ClassicCom;
 using Microsoft::WRL::FtmBase;
 
-typedef std::function<void(const float* pcmData, size_t sampleCount)> AudioDataCallback;
+typedef std::function<void(const float* pcmData, size_t sampleCount, uint64_t sequence, uint64_t capturedAtUs)> AudioDataCallback;
 typedef std::function<void(const std::string& errorMessage)> AudioErrorCallback;
 typedef std::function<void(const std::string& category, const std::string& message)> AudioDiagnosticCallback;
 

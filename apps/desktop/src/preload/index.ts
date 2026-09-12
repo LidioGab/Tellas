@@ -2,6 +2,15 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { DesktopSource, WindowsAudioEnvironment } from '@stream-app/shared';
 import type { AppInfo, UpdaterStatus } from '../updater/types';
 
+interface AudioFrame {
+  sequence: number;
+  capturedAtUs: number;
+  sampleRate: number;
+  channels: number;
+  frameCount: number;
+  samples: Float32Array;
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   // ─── Phase 1: Screen Capture Sources ──────────────────────────────────────
   getSources: (): Promise<DesktopSource[]> => {
@@ -40,18 +49,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /**
    * Register a callback to receive PCM audio buffer chunks from the main process.
-   * The callback receives a Float32Array of stereo-interleaved samples at 48kHz.
+   * The callback receives a timestamped AudioFrame with stereo-interleaved samples.
    * Returns a cleanup function to remove the listener.
    */
-  onAudioBuffer: (callback: (buffer: Float32Array) => void): (() => void) => {
+  onAudioBuffer: (callback: (frame: AudioFrame) => void): (() => void) => {
     ipcRenderer.send('audio-diagnostic-event', {
       layer: 'PRELOAD',
       category: 'LISTENER',
       data: { onAudioBufferRegistered: true }
     });
 
-    const handler = (_event: Electron.IpcRendererEvent, buffer: Float32Array) => {
-      callback(buffer);
+    const handler = (_event: Electron.IpcRendererEvent, frame: AudioFrame) => {
+      callback(frame);
     };
     ipcRenderer.on('audio-buffer', handler);
     return () => ipcRenderer.removeListener('audio-buffer', handler);

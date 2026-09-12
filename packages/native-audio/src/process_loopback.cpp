@@ -437,6 +437,10 @@ void ProcessLoopbackCapture::CaptureThreadFunc() {
 
     HANDLE waitEvents[2] = { m_hStopEvent, m_hAudioSampleReadyEvent };
     std::vector<float> resampledBuffer;
+    std::vector<float> pendingSamples;
+    pendingSamples.reserve(4800);
+    constexpr size_t kFrameSamples = 480 * 2; // 10 ms, 48 kHz, stereo interleaved
+    uint64_t frameSequence = 0;
 
     auto startTime = std::chrono::steady_clock::now();
     auto lastReportTime = startTime;
@@ -471,12 +475,17 @@ void ProcessLoopbackCapture::CaptureThreadFunc() {
                     nullptr
                 ) : E_FAIL;
 
-                if (SUCCEEDED(hrBuffer) && pData && numFramesAvailable > 0) {
+                if (SUCCEEDED(hrBuffer) && numFramesAvailable > 0) {
                     totalPackets++;
                     totalFrames += numFramesAvailable;
 
                     if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
                         silentPackets++;
+                        const UINT32 inputRate = m_pwfx ? m_pwfx->nSamplesPerSec : 48000;
+                        const size_t silentFrames48k = static_cast<size_t>(
+                            std::llround(static_cast<double>(numFramesAvailable) * 48000.0 / inputRate)
+                        );
+                        resampledBuffer.assign(silentFrames48k * 2, 0.0f);
                     } else {
                         nonSilentPackets++;
 
@@ -514,9 +523,25 @@ void ProcessLoopbackCapture::CaptureThreadFunc() {
                                 EmitDiagnostic("PCM", pcmData);
                             }
 
+                        }
+                    }
+
+                    if (!resampledBuffer.empty()) {
+                        pendingSamples.insert(pendingSamples.end(), resampledBuffer.begin(), resampledBuffer.end());
+                        size_t emittedSamples = 0;
+                        while (pendingSamples.size() - emittedSamples >= kFrameSamples) {
                             if (m_onData) {
-                                m_onData(resampledBuffer.data(), resampledBuffer.size());
+                                const auto capturedAtUs = static_cast<uint64_t>(
+                                    std::chrono::duration_cast<std::chrono::microseconds>(
+                                        std::chrono::steady_clock::now().time_since_epoch()
+                                    ).count()
+                                );
+                                m_onData(pendingSamples.data() + emittedSamples, kFrameSamples, frameSequence++, capturedAtUs);
                             }
+                            emittedSamples += kFrameSamples;
+                        }
+                        if (emittedSamples > 0) {
+                            pendingSamples.erase(pendingSamples.begin(), pendingSamples.begin() + emittedSamples);
                         }
                     }
 

@@ -9,6 +9,7 @@
 #include <mmdeviceapi.h>
 #include <audiopolicy.h>
 #include <wrl/client.h>
+#include <atomic>
 
 using Microsoft::WRL::ComPtr;
 
@@ -19,6 +20,7 @@ public:
             InstanceMethod("start", &NativeAudioAddon::Start),
             InstanceMethod("stop", &NativeAudioAddon::Stop),
             InstanceMethod("isCapturing", &NativeAudioAddon::IsCapturing),
+            InstanceMethod("getStats", &NativeAudioAddon::GetStats),
             InstanceMethod("setDiagnosticCallback", &NativeAudioAddon::SetDiagnosticCallback),
             StaticMethod("isOfficiallySupported", &NativeAudioAddon::IsOfficiallySupported),
             StaticMethod("isProbeEligible", &NativeAudioAddon::IsProbeEligible),
@@ -175,6 +177,13 @@ private:
         return Napi::Boolean::New(env, m_capture && m_capture->IsCapturing());
     }
 
+    Napi::Value GetStats(const Napi::CallbackInfo& info) {
+        Napi::Object stats = Napi::Object::New(info.Env());
+        stats.Set("submittedFrames", Napi::Number::New(info.Env(), static_cast<double>(m_submittedFrames.load())));
+        stats.Set("droppedFrames", Napi::Number::New(info.Env(), static_cast<double>(m_droppedFrames.load())));
+        return stats;
+    }
+
     Napi::Value Start(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
 
@@ -195,24 +204,35 @@ private:
             env,
             callback,
             "NativeAudioDataCallback",
-            0,
+            4,
             1
         );
 
-        auto onData = [this](const float* pcmData, size_t sampleCount) {
+        m_submittedFrames = 0;
+        m_droppedFrames = 0;
+        auto onData = [this](const float* pcmData, size_t sampleCount, uint64_t sequence, uint64_t capturedAtUs) {
             if (!this->m_capture || !this->m_capture->IsCapturing()) return;
             if (!this->m_tsfn) return;
 
             std::vector<float> bufferCopy(pcmData, pcmData + sampleCount);
 
-            this->m_tsfn.NonBlockingCall([bufferCopy = std::move(bufferCopy)](Napi::Env env, Napi::Function jsCallback) {
+            napi_status status = this->m_tsfn.NonBlockingCall([bufferCopy = std::move(bufferCopy), sequence, capturedAtUs](Napi::Env env, Napi::Function jsCallback) {
                 if (env == nullptr || jsCallback.IsEmpty()) return;
                 Napi::Float32Array float32Arr = Napi::Float32Array::New(env, bufferCopy.size());
                 float* dest = float32Arr.Data();
                 std::memcpy(dest, bufferCopy.data(), bufferCopy.size() * sizeof(float));
 
-                jsCallback.Call({ float32Arr });
+                Napi::Object frame = Napi::Object::New(env);
+                frame.Set("sequence", Napi::Number::New(env, static_cast<double>(sequence)));
+                frame.Set("capturedAtUs", Napi::Number::New(env, static_cast<double>(capturedAtUs)));
+                frame.Set("sampleRate", Napi::Number::New(env, 48000));
+                frame.Set("channels", Napi::Number::New(env, 2));
+                frame.Set("frameCount", Napi::Number::New(env, bufferCopy.size() / 2));
+                frame.Set("samples", float32Arr);
+                jsCallback.Call({ frame });
             });
+            if (status == napi_ok) this->m_submittedFrames++;
+            else this->m_droppedFrames++;
         };
 
         auto onError = [this](const std::string& err) {
@@ -267,6 +287,8 @@ private:
     std::unique_ptr<ProcessLoopbackCapture> m_capture;
     Napi::ThreadSafeFunction m_tsfn;
     Napi::ThreadSafeFunction m_diagTsfn;
+    std::atomic<uint64_t> m_submittedFrames{0};
+    std::atomic<uint64_t> m_droppedFrames{0};
 };
 
 Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
