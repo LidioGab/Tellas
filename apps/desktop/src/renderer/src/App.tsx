@@ -382,6 +382,17 @@ export const App: React.FC = () => {
       onError: (error: Error) => {
         console.error('[App] Cloudflare Realtime error:', error);
       },
+      onPublicationRecoveryFailed: (error: Error) => {
+        console.error('[App] Cloudflare publication recovery failed:', error);
+        const stream = localStreamRef.current;
+        stream?.getVideoTracks().forEach((track) => { track.onended = null; });
+        stream?.getTracks().forEach((track) => track.stop());
+        audioCaptureManager.stop();
+        localStreamRef.current = null;
+        setLocalStream(null);
+        setIsStreaming(false);
+        setSelectedSource(null);
+      },
       onSubscriptionFailed: (participantId: string, error: Error) => {
         if (participantId !== selectedStreamParticipantIdRef.current) return;
         setIsStreamLoading(false);
@@ -931,6 +942,7 @@ export const App: React.FC = () => {
           console.error(`[App] Failed atomic publish cleanup (${operation}):`, cleanupError);
         },
       });
+      cloudflareRealtimeService.markPublicationConfirmed();
 
       window.electronAPI?.sendAudioDiagnosticEvent?.('PUBLISH_STREAM_SUCCESS', {
         status: 'STREAM_PUBLISHED',

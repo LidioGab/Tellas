@@ -15,6 +15,8 @@ export interface CloudflareRealtimeCallbacks {
   onConnectionStateChanged: (state: RealtimeConnectionState) => void;
   onError: (error: Error) => void;
   onSubscriptionFailed?: (participantId: string, error: Error) => void;
+  onParticipantDisconnected?: (participantId: string) => void;
+  onPublicationRecoveryFailed?: (error: Error) => void;
 }
 
 interface SessionDescriptionPayload {
@@ -95,6 +97,30 @@ async function waitForIceGathering(peerConnection: RTCPeerConnection): Promise<v
   });
 }
 
+async function waitForPeerConnectionConnected(peerConnection: RTCPeerConnection): Promise<void> {
+  if (peerConnection.connectionState === 'connected') return;
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => finish(new Error('A conexão de mídia não ficou pronta para transmitir.')), 10_000);
+
+    function finish(error?: Error) {
+      window.clearTimeout(timeout);
+      peerConnection.removeEventListener('connectionstatechange', handleStateChange);
+      if (error) reject(error);
+      else resolve();
+    }
+
+    function handleStateChange() {
+      if (peerConnection.connectionState === 'connected') finish();
+      else if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'closed') {
+        finish(new Error(`A conexão de mídia falhou antes da publicação (${peerConnection.connectionState}).`));
+      }
+    }
+
+    peerConnection.addEventListener('connectionstatechange', handleStateChange);
+    handleStateChange();
+  });
+}
+
 export class CloudflareRealtimeService {
   private peerConnection: RTCPeerConnection | null = null;
   private callbacks: CloudflareRealtimeCallbacks | null = null;
@@ -113,6 +139,9 @@ export class CloudflareRealtimeService {
   private participantId: string | null = null;
   private roomId: string | null = null;
   private reconnectAttempt = 0;
+  private publishInFlight = false;
+  private publicationConfirmed = false;
+  private recoveryPending = false;
   private currentVideoPreset: VideoQualityPreset = VIDEO_QUALITY_PRESETS['1080p30'];
   private readonly backendUrl = getBackendUrl();
 
@@ -179,6 +208,11 @@ export class CloudflareRealtimeService {
       this.callbacks?.onConnectionStateChanged(peerConnection.connectionState);
       if (!this.intentionalClose && (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected')) {
         if (DEV) console.log('[CLOUDFLARE][RECONNECT_TRIGGERED]', { participantId: this.participantId, roomId: this.roomId, previousSessionId: this.sessionId, reason: peerConnection.connectionState, wasPublishing: Boolean(this.localStream), watchingParticipantId: this.currentlySubscribedParticipantId });
+        if (this.publishInFlight || (this.localStream && !this.publicationConfirmed)) {
+          this.recoveryPending = true;
+          if (DEV) console.log('[CLOUDFLARE][RECONNECT_DEFERRED]', { publishInFlight: this.publishInFlight, publicationConfirmed: this.publicationConfirmed });
+          return;
+        }
         void this.recover().catch((error) => this.callbacks?.onError(error instanceof Error ? error : new Error(String(error))));
       }
     };
@@ -200,16 +234,30 @@ export class CloudflareRealtimeService {
   }
 
   async publishStream(stream: MediaStream, preset?: VideoQualityPreset): Promise<void> {
-    await this.connect();
-    if (!this.peerConnection) throw new Error('PeerConnection Cloudflare indisponível.');
-    const videoTracks = stream.getVideoTracks();
-    const audioTracks = stream.getAudioTracks();
-    if (videoTracks.length !== 1 || audioTracks.length > 1) throw new Error('A publicação requer uma tela e no máximo um áudio de sistema.');
-    if (DEV) {
-      console.log('[CLOUDFLARE][PUBLISH_REQUEST]', { participantId: this.participantId, roomId: this.roomId, hasVideoTrack: videoTracks.length > 0, hasAudioTrack: audioTracks.length > 0 });
-    }
-    const senders = [...videoTracks, ...audioTracks].map((track) => this.peerConnection!.addTrack(track, stream));
+    if (!this.recovering) this.publicationConfirmed = false;
+    this.publishInFlight = true;
+    let senders: RTCRtpSender[] = [];
     try {
+      const transitioningFromViewer = !this.localStream
+        && Boolean(this.peerConnection?.getTransceivers().length);
+      if (transitioningFromViewer) {
+        if (DEV) console.log('[CLOUDFLARE][MEDIA_ROLE_TRANSITION]', {
+          from: 'viewer',
+          to: 'publisher',
+          previousSessionId: this.sessionId,
+          transceiverCount: this.peerConnection?.getTransceivers().length || 0,
+        });
+        await this.discardMediaSession('viewer-to-publisher');
+      }
+      await this.connect();
+      if (!this.peerConnection) throw new Error('PeerConnection Cloudflare indisponível.');
+      const videoTracks = stream.getVideoTracks();
+      const audioTracks = stream.getAudioTracks();
+      if (videoTracks.length !== 1 || audioTracks.length > 1) throw new Error('A publicação requer uma tela e no máximo um áudio de sistema.');
+      if (DEV) {
+        console.log('[CLOUDFLARE][PUBLISH_REQUEST]', { participantId: this.participantId, roomId: this.roomId, hasVideoTrack: videoTracks.length > 0, hasAudioTrack: audioTracks.length > 0 });
+      }
+      senders = [...videoTracks, ...audioTracks].map((track) => this.peerConnection!.addTrack(track, stream));
       if (preset) this.currentVideoPreset = preset;
       const videoSender = senders.find((sender) => sender.track?.kind === 'video');
       if (videoSender) await this.applyVideoPolicy(videoSender, videoTracks[0]);
@@ -228,6 +276,7 @@ export class CloudflareRealtimeService {
         tracks,
       });
       await this.peerConnection.setRemoteDescription(result.sessionDescription);
+      await waitForPeerConnectionConnected(this.peerConnection);
       this.localStream = stream;
     } catch (error) {
       for (const sender of senders) this.peerConnection?.removeTrack(sender);
@@ -235,6 +284,19 @@ export class CloudflareRealtimeService {
       if (error instanceof RealtimeApiError && error.status === 410) await this.discardMediaSession('cloudflare-session-disconnected');
       else if (this.peerConnection?.signalingState === 'have-local-offer') await this.peerConnection.setLocalDescription({ type: 'rollback' }).catch(() => undefined);
       throw error;
+    } finally {
+      this.publishInFlight = false;
+      if (!this.localStream && !this.publicationConfirmed) this.recoveryPending = false;
+    }
+  }
+
+  markPublicationConfirmed(): void {
+    this.publicationConfirmed = true;
+    this.reconnectAttempt = 0;
+    const state = this.peerConnection?.connectionState;
+    if (this.recoveryPending && (state === 'failed' || state === 'disconnected')) {
+      this.recoveryPending = false;
+      void this.recover().catch((error) => this.callbacks?.onError(error instanceof Error ? error : new Error(String(error))));
     }
   }
 
@@ -282,7 +344,7 @@ export class CloudflareRealtimeService {
     await this.api('renegotiate', { sessionDescription: toPayload(this.peerConnection.localDescription) });
   }
 
-  private async subscribeOnce(participantId: string, allowSessionRetry: boolean): Promise<void> {
+  private async subscribeOnce(participantId: string, allowSessionRetry: boolean, recoveryRetry = 0): Promise<void> {
     const previous = this.currentlySubscribedParticipantId;
     if (previous && previous !== participantId) {
       if (DEV) console.log('[CLOUDFLARE][SWITCH_TARGET]', { previousParticipantId: previous, nextParticipantId: participantId, generation: this.subscriptionGeneration + 1 });
@@ -315,9 +377,15 @@ export class CloudflareRealtimeService {
         }).catch((error) => this.callbacks?.onError(error instanceof Error ? error : new Error(String(error))));
       }, 5_000);
     } catch (error) {
-      if (allowSessionRetry && error instanceof RealtimeApiError && error.code === 'CLOUDFLARE_SDP_MISSING') {
-        await this.discardMediaSession('missing-sdp');
-        return this.subscribeOnce(participantId, false);
+      const transientTargetError = error instanceof RealtimeApiError
+        && ['TARGET_STREAM_RECOVERING', 'CLOUDFLARE_SDP_MISSING', 'empty_track_error'].includes(error.code || '');
+      const retryLimit = error instanceof RealtimeApiError && error.code === 'TARGET_STREAM_RECOVERING' ? 5 : 2;
+      if (transientTargetError && recoveryRetry < retryLimit) {
+        const delayMs = Math.min(1_000, 250 * (2 ** recoveryRetry));
+        if (DEV) console.log('[CLOUDFLARE][TARGET_RECOVERY_WAIT]', { targetParticipantId: participantId, attempt: recoveryRetry + 1, delayMs });
+        await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
+        if (generation !== this.subscriptionGeneration || participantId !== this.currentlySubscribedParticipantId) return;
+        return this.subscribeOnce(participantId, allowSessionRetry, recoveryRetry + 1);
       }
       if (generation === this.subscriptionGeneration) {
         await this.api('unsubscribe').catch(() => undefined);
@@ -361,7 +429,11 @@ export class CloudflareRealtimeService {
   }
 
   async unpublishAllTracks(): Promise<void> {
-    if (!this.localStream) return;
+    if (!this.localStream) {
+      this.publicationConfirmed = false;
+      this.recoveryPending = false;
+      return;
+    }
     if (DEV) console.log('[CLOUDFLARE][STOP_PUBLISH_REQUEST]', { participantId: this.participantId, sessionId: this.sessionId, watchingParticipantId: this.currentlySubscribedParticipantId });
     const result = await this.api<{ sessionDescription?: SessionDescriptionPayload }>('unpublish');
     if (result.sessionDescription) await this.applyRemoteOffer(result.sessionDescription);
@@ -373,6 +445,8 @@ export class CloudflareRealtimeService {
       }
     }
     this.localStream = null;
+    this.publicationConfirmed = false;
+    this.recoveryPending = false;
     if (DEV) console.log('[CLOUDFLARE][STOP_PUBLISH_COMPLETE]', { participantId: this.participantId, stillWatchingParticipantId: this.currentlySubscribedParticipantId });
   }
 
@@ -388,6 +462,8 @@ export class CloudflareRealtimeService {
     this.currentlySubscribedParticipantId = null;
     this.remoteMids = [];
     this.localStream = null;
+    this.publicationConfirmed = false;
+    this.recoveryPending = false;
     this.callbacks?.onConnectionStateChanged('closed');
     await this.api('disconnect').catch(() => undefined);
   }
@@ -414,7 +490,20 @@ export class CloudflareRealtimeService {
       if (localStream) { if (DEV) console.log('[CLOUDFLARE][RECONNECT_REPUBLISH]', { video: localStream.getVideoTracks().length > 0, audio: localStream.getAudioTracks().length > 0 }); await this.publishStream(localStream); }
       if (target) { if (DEV) console.log('[CLOUDFLARE][RECONNECT_RESUBSCRIBE]', { targetParticipantId: target }); await this.subscribeToParticipant(target); }
       else if (DEV) console.log('[CLOUDFLARE][RECONNECT_IDLE]', { remoteTracksRequested: 0 });
+      this.recoveryPending = false;
       if (DEV) console.log('[CLOUDFLARE][RECONNECT_COMPLETE]', { isPublishing: Boolean(this.localStream), watchingParticipantId: this.currentlySubscribedParticipantId });
+    } catch (error) {
+      if (localStream) {
+        await this.api('abandon-publication').catch(() => undefined);
+        this.peerConnection?.close();
+        this.peerConnection = null;
+        this.sessionId = null;
+        this.localStream = null;
+        this.publicationConfirmed = false;
+        this.recoveryPending = false;
+        this.callbacks?.onPublicationRecoveryFailed?.(error instanceof Error ? error : new Error(String(error)));
+      }
+      throw error;
     } finally {
       this.recovering = false;
     }
@@ -427,6 +516,8 @@ export class CloudflareRealtimeService {
     this.peerConnection = null;
     this.sessionId = null;
     this.localStream = null;
+    this.publicationConfirmed = false;
+    this.recoveryPending = false;
     this.currentlySubscribedParticipantId = null;
     this.remoteStreams.forEach((remoteStream, participantId) => {
       remoteStream.getTracks().forEach((track) => track.stop());

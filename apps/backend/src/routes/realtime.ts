@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { verifySessionToken, type SessionPayload } from '../auth/session';
-import { getRoom } from '../socket/signaling';
+import { abandonActivePublication, getRoom } from '../socket/signaling';
 import { checkRateLimit } from '../security/rateLimiter';
 import {
   CloudflareRealtimeError,
@@ -10,6 +10,7 @@ import {
 } from '../media/cloudflareRealtimeClient';
 import { cloudflareSessionRegistry } from '../media/cloudflareSessionRegistry';
 import { logInstanceEvent } from '../observability/instance';
+import { resolvePublishAuthorization } from '../media/publishAuthorization';
 
 interface AuthenticatedMediaRequest {
   session: SessionPayload;
@@ -165,9 +166,20 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     const mediaSession = ownedSession(auth.session.participantId, auth.session.roomId);
     if (!mediaSession) return reply.status(409).send({ error: 'Sessão de mídia ausente.', code: 'MEDIA_SESSION_REQUIRED' });
     if (!auth.session.canPublish) return reply.status(403).send({ error: 'Publicação não autorizada.', code: 'PUBLISH_FORBIDDEN' });
-    if (!auth.room.reservedPublishers.has(auth.session.participantId)) {
+    const registeredStream = cloudflareSessionRegistry.getStream(auth.session.participantId);
+    const publishMode = resolvePublishAuthorization({
+      hasReservation: auth.room.reservedPublishers.has(auth.session.participantId),
+      isActiveStreamer: auth.room.activeStreamers.has(auth.session.participantId),
+      hasRegisteredStream: Boolean(registeredStream),
+    });
+    if (!publishMode) {
       return reply.status(409).send({ error: 'Reserva de transmissão ausente ou expirada.', code: 'STREAM_RESERVATION_REQUIRED' });
     }
+    devLog('PUBLISH_AUTHORIZED', {
+      participantId: auth.session.participantId,
+      roomId: auth.session.roomId,
+      mode: publishMode,
+    });
     if (!isSessionDescription(request.body?.sessionDescription)) {
       return reply.status(400).send({ error: 'SDP inválido.', code: 'INVALID_SESSION_DESCRIPTION' });
     }
@@ -237,6 +249,12 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
       targetStreaming,
       authorized: Boolean(targetMember && targetStreaming && sameRoom),
     });
+    if (targetMember && !targetStream && auth.room.activeStreamers.has(targetParticipantId)) {
+      return reply.status(409).send({
+        error: 'A transmissão alvo está reconectando. Tente novamente em instantes.',
+        code: 'TARGET_STREAM_RECOVERING',
+      });
+    }
     if (!targetMember || !targetStream || targetStream.roomId !== auth.session.roomId || !auth.room.activeStreamers.has(targetParticipantId)) {
       devLog('AUTHORIZATION_REJECTED', { reason: targetStream && !sameRoom ? 'CROSS_ROOM' : 'TARGET_NOT_STREAMING', participantId: auth.session.participantId, targetParticipantId });
       return reply.status(403).send({ error: 'Transmissão alvo indisponível nesta sala.', code: 'TARGET_STREAM_FORBIDDEN' });
@@ -265,16 +283,21 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
         trackId: track.trackName,
       });
       const result = await runSessionOperation(viewerSession.cloudflareSessionId, () => client.addTracks(viewerSession.cloudflareSessionId, { tracks: remoteTracks }));
+      const createdMids = (result.tracks || []).map((track) => track.mid).filter((mid): mid is string => Boolean(mid));
       if (!result.sessionDescription) {
-        const createdMids = (result.tracks || []).map((track) => track.mid).filter((mid): mid is string => Boolean(mid));
         if (createdMids.length > 0) {
           await runSessionOperation(viewerSession.cloudflareSessionId, () => client.closeTracks(viewerSession.cloudflareSessionId, createdMids)).catch(() => undefined);
         }
         throw new CloudflareRealtimeError('Oferta SDP ausente.', 502, 'CLOUDFLARE_SDP_MISSING');
       }
       const failed = result.tracks?.find((track) => track.errorCode);
-      if (failed) throw new CloudflareRealtimeError(failed.errorDescription || 'Falha ao receber track.', 502, failed.errorCode || 'TRACK_SUBSCRIBE_FAILED');
-      const remoteMids = (result.tracks || []).map((track) => track.mid).filter((mid): mid is string => Boolean(mid));
+      if (failed) {
+        if (createdMids.length > 0) {
+          await runSessionOperation(viewerSession.cloudflareSessionId, () => client.closeTracks(viewerSession.cloudflareSessionId, createdMids)).catch(() => undefined);
+        }
+        throw new CloudflareRealtimeError(failed.errorDescription || 'Falha ao receber track.', 502, failed.errorCode || 'TRACK_SUBSCRIBE_FAILED');
+      }
+      const remoteMids = createdMids;
       cloudflareSessionRegistry.setSubscription({
         viewerParticipantId: auth.session.participantId,
         targetParticipantId,
@@ -373,5 +396,23 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     }
     cloudflareSessionRegistry.removeParticipant(auth.session.participantId, 'explicit-cleanup');
     return reply.send({ success: true });
+  });
+
+  app.post('/api/realtime/abandon-publication', async (request, reply) => {
+    const auth = await authenticate(request, reply);
+    if (!auth) return;
+    const mediaSession = ownedSession(auth.session.participantId, auth.session.roomId);
+    if (mediaSession) {
+      const stream = cloudflareSessionRegistry.getStream(auth.session.participantId);
+      const mids = stream ? [stream.videoMid, ...(stream.audioMid ? [stream.audioMid] : [])] : [];
+      try {
+        await runSessionOperation(mediaSession.cloudflareSessionId, () => client.closeTracks(mediaSession.cloudflareSessionId, mids));
+      } catch (error) {
+        request.log.warn({ err: error }, 'Cloudflare recovery-abandon cleanup failed');
+      }
+    }
+    cloudflareSessionRegistry.removeParticipant(auth.session.participantId, 'recovery-failed');
+    const abandoned = abandonActivePublication(auth.session.roomId, auth.session.participantId, 'recovery-failed');
+    return reply.send({ success: true, abandoned });
   });
 }

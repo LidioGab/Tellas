@@ -53,9 +53,29 @@ export interface ExtendedRoomState {
 }
 
 const rooms = new Map<string, ExtendedRoomState>();
+let signalingServer: SocketIOServer | null = null;
 
 export function getRoomCount(): number {
   return rooms.size;
+}
+
+export function abandonActivePublication(roomId: string, participantId: string, reason: string): boolean {
+  const room = rooms.get(roomId);
+  if (!room) return false;
+  clearPublisherReservation(room, participantId);
+  const wasActive = room.activeStreamers.delete(participantId);
+  if (!wasActive) return false;
+  const member = room.members.get(participantId);
+  signalingServer?.to(roomId).emit('stream-stopped', {
+    streamerSocketId: member?.currentSocketId || undefined,
+    participantId,
+    identity: member?.identity,
+    remainingStreamersCount: room.activeStreamers.size,
+    reason,
+  });
+  signalingServer?.to(roomId).emit('stream-viewers-updated', { streamerParticipantId: participantId, viewers: [] });
+  logInstanceEvent('STREAM_RECOVERY_ABANDONED', { operation: 'recover-publish', roomId, participantId, roomCount: rooms.size });
+  return true;
 }
 
 function clearPublisherReservation(room: ExtendedRoomState, participantId: string): boolean {
@@ -225,12 +245,14 @@ export function resetRoomStore(): void {
     }
   }
   rooms.clear();
+  signalingServer = null;
   cloudflareSessionRegistry.reset();
 }
 
 // ─── Socket.IO Signaling & Room Management ──────────────────────────────────
 
 export function setupSignaling(io: SocketIOServer) {
+  signalingServer = io;
   cloudflareSessionRegistry.setSubscriptionChangeListener((roomId, streamerParticipantId) => {
     const room = rooms.get(roomId);
     if (!room) return;
