@@ -36,8 +36,10 @@ yarn-error.log*
 logs/
 *.log
 
-# IDE & OS
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+# SQLite & local databases
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+

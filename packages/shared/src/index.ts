@@ -168,3 +168,48 @@ export interface WindowsAudioEnvironment {
   processLoopbackSupported: boolean;
   strategy: AudioCaptureStrategy;
 }
+
+// ─── User & Authentication ───────────────────────────────────────────────────
+
+export interface UserProfile {
+  id: string;
+  username: string;
+  email: string;
+  avatarUrl?: string;
+  createdAt: number;
+}
+
+export interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number; // seconds
+}
+
+export interface AuthResponse {
+  user: UserProfile;
+  tokens: AuthTokens;
+}
+
+export interface RegisterRequest {
+  username: string;
+  email: string;
+  password: string;
+  avatarUrl?: string;
+}
+
+export interface LoginRequest {
+  emailOrUsername: string;
+  password: string;
+}
+
+export interface RefreshTokenRequest {
+  refreshToken: string;
+}
+
+export interface UpdateProfileRequest {
+  username?: string;
+  avatarUrl?: string;
+  currentPassword?: string;
+  newPassword?: string;
+}
+

@@ -108,4 +108,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener('updater:status', handler);
     },
   },
+  auth: {
+    storeRefreshToken: (refreshToken: string): Promise<boolean> => ipcRenderer.invoke('auth:store-refresh-token', refreshToken),
+    refresh: (backendUrl: string): Promise<{ accessToken: string; expiresIn: number } | null> => ipcRenderer.invoke('auth:refresh', backendUrl),
+    logout: (backendUrl: string): Promise<boolean> => ipcRenderer.invoke('auth:logout', backendUrl),
+  },
 });

@@ -12,15 +12,20 @@
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
+    "@libsql/client": "^0.18.0",
     "@stream-app/shared": "*",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",
     "fastify": "^4.26.2",
     "jose": "^5.2.3",
     "livekit-server-sdk": "^2.18.0",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "zod": "^4.6.5"
   },
-
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.11.24",
     "tsx": "^4.7.1",
     "typescript": "^5.4.0"

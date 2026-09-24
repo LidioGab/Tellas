@@ -9,6 +9,15 @@ primary_region = 'gru'
 [build]
   dockerfile = 'Dockerfile'
 
+[env]
+  DATA_DIR = '/data'
+  DATABASE_PATH = '/data/tellas.db'
+
+[mounts]
+  source = 'tellas_data'
+  destination = '/data'
+  initial_size = '1gb'
+
 [http_service]
   internal_port = 8080
   force_https = true

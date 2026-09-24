@@ -4,6 +4,7 @@ import fs from 'fs';
 import electronUpdater from 'electron-updater';
 import { discordAudioIsolationService } from './DiscordAudioIsolationService';
 import { AppUpdaterService } from './AppUpdaterService';
+import { secureAuthStorage } from './SecureAuthStorage';
 
 
 // Enable Chromium Desktop System Audio & Screen Capturing Switches
@@ -107,6 +108,52 @@ ipcMain.handle('updater:get-status', () => appUpdaterService.getStatus());
 ipcMain.handle('updater:check', () => appUpdaterService.checkForUpdates());
 ipcMain.handle('updater:download', () => appUpdaterService.downloadUpdate());
 ipcMain.handle('updater:install', () => appUpdaterService.installUpdate());
+
+const allowedAuthBackends = new Set(['https://tellas.fly.dev', 'http://localhost:3001']);
+function requireAllowedAuthBackend(value: unknown): string {
+  const backendUrl = String(value || '').replace(/\/$/, '');
+  if (!allowedAuthBackends.has(backendUrl)) throw new Error('Backend de autenticação não autorizado.');
+  return backendUrl;
+}
+
+ipcMain.handle('auth:store-refresh-token', (_event, refreshToken: unknown) => {
+  if (typeof refreshToken !== 'string' || refreshToken.length < 32) throw new Error('Refresh token inválido.');
+  secureAuthStorage.saveRefreshToken(refreshToken);
+  return true;
+});
+
+ipcMain.handle('auth:refresh', async (_event, requestedBackendUrl: unknown) => {
+  const backendUrl = requireAllowedAuthBackend(requestedBackendUrl);
+  const refreshToken = secureAuthStorage.getRefreshToken();
+  if (!refreshToken) return null;
+  const response = await fetch(`${backendUrl}/api/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  });
+  if (!response.ok) {
+    if (response.status === 401) secureAuthStorage.clear();
+    return null;
+  }
+  const data = await response.json() as { tokens?: { accessToken: string; refreshToken: string; expiresIn: number } };
+  if (!data.tokens?.refreshToken) return null;
+  secureAuthStorage.saveRefreshToken(data.tokens.refreshToken);
+  return { accessToken: data.tokens.accessToken, expiresIn: data.tokens.expiresIn };
+});
+
+ipcMain.handle('auth:logout', async (_event, requestedBackendUrl: unknown) => {
+  const backendUrl = requireAllowedAuthBackend(requestedBackendUrl);
+  const refreshToken = secureAuthStorage.getRefreshToken();
+  secureAuthStorage.clear();
+  if (refreshToken) {
+    await fetch(`${backendUrl}/api/auth/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    }).catch(() => undefined);
+  }
+  return true;
+});
 
 import { win10AudioLogger } from './Win10AudioDiagnosticLogger';
 

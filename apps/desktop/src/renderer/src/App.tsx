@@ -17,6 +17,11 @@ import { StreamPublisher } from './components/StreamPublisher';
 import { StreamViewer } from './components/StreamViewer';
 import { TellasLogo } from './components/TellasLogo';
 import { AppUpdateControl } from './components/AppUpdateControl';
+import { AuthModal, AuthForm } from './components/AuthModal';
+import { UserProfileBadge } from './components/UserProfileBadge';
+import { AccountSettingsModal } from './components/AccountSettingsModal';
+import { clientAuthService } from './services/authService';
+import type { UserProfile } from '@stream-app/shared';
 import {
   Monitor,
   Users,
@@ -26,6 +31,7 @@ import {
   PlusCircle,
   LogIn,
   LogOut,
+  ShieldCheck,
   User,
   Settings,
   Crown,
@@ -116,6 +122,10 @@ function emitStopStreamCommand(roomId: string): Promise<PublishCommandResponse> 
 }
 
 export const App: React.FC = () => {
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => clientAuthService.getCurrentUser());
+  const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState<boolean>(false);
   const [userName, setUserName] = useState<string>(() => {
     return localStorage.getItem('stream_username') || generateRandomName();
   });
@@ -164,6 +174,21 @@ export const App: React.FC = () => {
 
   // Device & layout classification (DESKTOP, MOBILE_PORTRAIT, MOBILE_LANDSCAPE)
   const { layoutMode, isFullscreen } = useLayoutMode();
+
+  // Listen to Auth State Changes
+  useEffect(() => {
+    const unsubscribe = clientAuthService.onAuthStateChanged((user) => {
+      setCurrentUser(user);
+      if (user) {
+        setUserName(user.username);
+        localStorage.setItem('stream_username', user.username);
+      }
+    });
+    void clientAuthService.initializeSession().catch((err) => {
+      console.error('[App] Failed to restore authenticated session:', err);
+    });
+    return unsubscribe;
+  }, []);
 
   // Query audio environment on mount
   useEffect(() => {
@@ -675,6 +700,11 @@ export const App: React.FC = () => {
   }, [lastRoomId]);
 
   const handleCreateRoom = useCallback(() => {
+    if (!currentUser) {
+      setAuthModalMode('login');
+      setAuthModalOpen(true);
+      return;
+    }
     const identity = getEffectiveIdentity();
     try {
       sessionStorage.removeItem('tellas_session_token');
@@ -707,9 +737,14 @@ export const App: React.FC = () => {
         alert(res.error || 'Erro ao criar sala');
       }
     });
-  }, [getEffectiveIdentity, rememberRoom]);
+  }, [currentUser, getEffectiveIdentity, rememberRoom]);
 
   const joinRoom = useCallback((requestedRoomId: string, fromLastRoomShortcut = false) => {
+    if (!currentUser) {
+      setAuthModalMode('login');
+      setAuthModalOpen(true);
+      return;
+    }
     const cleanRoomId = requestedRoomId.trim().toUpperCase();
     if (!cleanRoomId || isJoiningRoom) return;
 
@@ -752,7 +787,7 @@ export const App: React.FC = () => {
         alert(res.error || 'Erro ao entrar na sala');
       }
     });
-  }, [forgetRoom, getEffectiveIdentity, isJoiningRoom, rememberRoom]);
+  }, [currentUser, forgetRoom, getEffectiveIdentity, isJoiningRoom, rememberRoom]);
 
   const handleJoinRoom = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -1160,13 +1195,24 @@ export const App: React.FC = () => {
         {/* Right: User Profile & Leave Action */}
         <div className="flex items-center gap-2">
           <AppUpdateControl mediaActive={isStreaming || watchModalOpen} />
-          <div className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-[#16191F] transition">
+          <UserProfileBadge
+            user={currentUser}
+            onOpenAuth={(mode) => {
+              setAuthModalMode(mode);
+              setAuthModalOpen(true);
+            }}
+            onLogout={() => {
+              void clientAuthService.logout();
+            }}
+            onOpenSettings={() => setAccountSettingsOpen(true)}
+          />
+          {false && <div className="hidden">
             <div className="w-5 h-5 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-bold text-[#F4F6F8] uppercase">
               {userName ? userName.charAt(0) : 'U'}
             </div>
             <span className="hidden sm:block text-xs font-medium text-[#F4F6F8] max-w-[100px] truncate">{userName}</span>
             <span className="w-1.5 h-1.5 rounded-full bg-[#34D399] shrink-0" />
-          </div>
+          </div>}
 
           {isInRoom && (
             <button
@@ -1185,7 +1231,17 @@ export const App: React.FC = () => {
         {!isInRoom ? (
           /* ── Landing / Login Screen ─────────────────────────────────── */
           <div className="h-full flex items-center justify-center p-4">
-            <div className="w-full max-w-sm bg-[#16191F] p-7 rounded-xl border border-[#252A34] shadow-card space-y-5">
+            {!currentUser ? (
+              <AuthForm
+                initialMode={authModalMode}
+                onSuccess={(user) => {
+                  setCurrentUser(user);
+                  setUserName(user.username);
+                  localStorage.setItem('stream_username', user.username);
+                }}
+              />
+            ) : (
+              <div className="w-full max-w-sm bg-[#16191F] p-7 rounded-xl border border-[#252A34] shadow-card space-y-5">
 
               {/* Header Icon & Title */}
               <div className="text-center space-y-2">
@@ -1199,8 +1255,32 @@ export const App: React.FC = () => {
               </div>
 
 
-              {/* Display Name Input */}
-              <div className="space-y-1.5">
+              {/* Logged in User Profile Info */}
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#101217] border border-[#252A34]">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full overflow-hidden border border-[#252A34] bg-[#16191F] shrink-0">
+                    <img
+                      src={currentUser.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(currentUser.username)}`}
+                      alt={currentUser.username}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-semibold text-[#F4F6F8] truncate">{currentUser.username}</span>
+                      <ShieldCheck className="w-3 h-3 text-[#34D399]" />
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => void clientAuthService.logout()}
+                  className="p-1.5 rounded-md hover:bg-[#1D2129] text-[#687180] hover:text-[#F87171] transition"
+                  title="Sair da conta"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {false && <div className="hidden">
                 <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#687180]">
                   Seu nome de exibição
                 </label>
@@ -1215,7 +1295,7 @@ export const App: React.FC = () => {
                     className="w-full pl-8 pr-3 py-2 rounded-lg bg-[#101217] text-[#F4F6F8] text-xs placeholder:text-[#505764] focus:outline-none focus:border-[#5B7CFA] border border-[#252A34] transition"
                   />
                 </div>
-              </div>
+              </div>}
 
               {/* Create Room Button */}
               <button
@@ -1300,7 +1380,7 @@ export const App: React.FC = () => {
                 </button>
               )}
 
-            </div>
+            </div>)}
           </div>
         ) : layoutMode === 'MOBILE_LANDSCAPE' ? (
           /* ── 1. Mobile Landscape Layout (Immersive Viewport, No Chrome) ── */
@@ -1863,6 +1943,24 @@ export const App: React.FC = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSelectSource={handleStartCapture}
+      />
+
+      {/* Authentication Modal */}
+      <AuthModal
+        isOpen={authModalOpen}
+        initialMode={authModalMode}
+        onClose={() => setAuthModalOpen(false)}
+        onSuccess={(user) => {
+          setCurrentUser(user);
+          setUserName(user.username);
+          localStorage.setItem('stream_username', user.username);
+        }}
+      />
+
+      <AccountSettingsModal
+        isOpen={accountSettingsOpen}
+        user={currentUser}
+        onClose={() => setAccountSettingsOpen(false)}
       />
 
       {isStartingStream && (

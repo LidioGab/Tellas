@@ -54,6 +54,11 @@ export interface ElectronAPI {
     install: () => Promise<boolean>;
     onStatusChanged: (callback: (status: UpdaterStatus) => void) => () => void;
   };
+  auth: {
+    storeRefreshToken: (refreshToken: string) => Promise<boolean>;
+    refresh: (backendUrl: string) => Promise<{ accessToken: string; expiresIn: number } | null>;
+    logout: (backendUrl: string) => Promise<boolean>;
+  };
 }
 
 declare global {

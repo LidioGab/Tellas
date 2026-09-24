@@ -10,8 +10,10 @@ import { resolveClientIp } from './security/ipResolver';
 import type { LiveKitTokenRequest } from '@stream-app/shared';
 import { CloudflareRealtimeClient } from './media/cloudflareRealtimeClient';
 import { registerRealtimeRoutes } from './routes/realtime';
+import { registerAuthRoutes } from './routes/auth';
 import { backendInstance, getUptimeSeconds, logInstanceEvent } from './observability/instance';
 import { cloudflareSessionRegistry } from './media/cloudflareSessionRegistry';
+import { db, runDatabaseMigrations } from './db/database';
 
 // ─── Environment Variables ──────────────────────────────────────────────────
 
@@ -21,6 +23,17 @@ const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || '';
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || '';
 const CLOUDFLARE_REALTIME_APP_ID = process.env.CLOUDFLARE_REALTIME_APP_ID || '';
 const CLOUDFLARE_REALTIME_API_TOKEN = process.env.CLOUDFLARE_REALTIME_API_TOKEN || '';
+const allowedOrigins = new Set(
+  (process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+);
+const isAllowedOrigin = (origin?: string): boolean => {
+  if (!origin) return true;
+  if (origin === 'null' || origin === 'file://') return true;
+  return allowedOrigins.has(origin);
+};
 const cloudflareRealtimeClient = new CloudflareRealtimeClient(
   CLOUDFLARE_REALTIME_APP_ID,
   CLOUDFLARE_REALTIME_API_TOKEN,
@@ -36,19 +49,22 @@ const LIVEKIT_TOKEN_TTL = process.env.LIVEKIT_TOKEN_TTL
 
 // ─── Fastify Application ────────────────────────────────────────────────────
 
-export const app = Fastify({
-  logger: process.env.NODE_ENV !== 'test',
-  bodyLimit: 16384, // 16 KB request body limit
-});
-
 export async function buildApp() {
-  await app.register(cors, {
-    origin: true,
-    methods: ['GET', 'POST', 'OPTIONS'],
+  await runDatabaseMigrations(db);
+
+  const server = Fastify({
+    logger: process.env.NODE_ENV !== 'test' && process.env.TELLAS_TEST !== 'true',
+    bodyLimit: 16384, // 16 KB request body limit
+  });
+
+
+  await server.register(cors, {
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
   });
 
-  app.addHook('onError', (request, _reply, error, done) => {
+  server.addHook('onError', (request, _reply, error, done) => {
     if (process.env.NODE_ENV !== 'production' && error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
       console.error('[CLOUDFLARE][BODY_LIMIT_REJECTED]', {
         route: request.url,
@@ -61,7 +77,7 @@ export async function buildApp() {
   });
 
   // ─── Health Check (Public & Safe) ───────────────────────────────────
-  app.get('/health', async () => {
+  server.get('/health', async () => {
     const media = cloudflareSessionRegistry.getStats();
     return {
       status: 'ok',
@@ -75,10 +91,11 @@ export async function buildApp() {
     };
   });
 
-  registerRealtimeRoutes(app, cloudflareRealtimeClient);
+  registerRealtimeRoutes(server, cloudflareRealtimeClient);
+  registerAuthRoutes(server);
 
   // ─── Protected LiveKit Token Endpoint (SEC-001 Resolved) ─────────────
-  app.post<{ Body: LiveKitTokenRequest }>('/api/livekit/token', async (request: FastifyRequest<{ Body: LiveKitTokenRequest }>, reply: FastifyReply) => {
+  server.post<{ Body: LiveKitTokenRequest }>('/api/livekit/token', async (request: FastifyRequest<{ Body: LiveKitTokenRequest }>, reply: FastifyReply) => {
     // Trusted IP resolution: Fly-Client-IP priority with fallback to remote IP
     const clientIp = resolveClientIp(
       request.headers as Record<string, string | string[] | undefined>,
@@ -192,27 +209,32 @@ export async function buildApp() {
     }
   });
 
-  return app;
+  return server;
 }
+
+export const app = Fastify({
+  logger: process.env.NODE_ENV !== 'test',
+  bodyLimit: 16384,
+});
 
 async function main() {
   logInstanceEvent('BACKEND_INSTANCE_STARTED', {
     pid: backendInstance.pid,
     nodeEnv: backendInstance.nodeEnv,
   });
-  await buildApp();
-  await app.ready();
+  const server = await buildApp();
+  await server.ready();
 
-  const io = new SocketIOServer(app.server, {
+  const io = new SocketIOServer(server.server, {
     cors: {
-      origin: '*',
+      origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
       methods: ['GET', 'POST'],
     },
   });
 
   setupSignaling(io);
 
-  await app.listen({ port: PORT, host: '0.0.0.0' });
+  await server.listen({ port: PORT, host: '0.0.0.0' });
 
   console.log(`\n==================================================`);
   console.log(`🚀 Tellas Backend running at http://0.0.0.0:${PORT}`);
@@ -223,9 +245,17 @@ async function main() {
   console.log(`==================================================\n`);
 }
 
-if (process.env.NODE_ENV !== 'test') {
+const isDirectRun =
+  Boolean(process.argv[1]) &&
+  (process.argv[1].endsWith('index.ts') ||
+    process.argv[1].endsWith('index.js') ||
+    process.argv[1].endsWith('backend\\dist\\index.js') ||
+    process.argv[1].endsWith('backend/dist/index.js'));
+
+if (isDirectRun && process.env.NODE_ENV !== 'test' && process.env.TELLAS_TEST !== 'true') {
   main().catch((err) => {
     console.error('Error starting server:', err);
     process.exit(1);
   });
 }
+
