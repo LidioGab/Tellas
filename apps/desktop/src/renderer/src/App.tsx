@@ -1396,9 +1396,6 @@ export const App: React.FC = () => {
         {/* Right: Version & Profile with dropdown */}
         <div className="flex items-center gap-3">
           <AppUpdateControl mediaActive={isStreaming || watchModalOpen} />
-          <span className="text-xs text-[#949BA4] font-medium hidden sm:inline">
-            Tellas Desktop v1.0.9
-          </span>
 
           <div className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#35373C] cursor-pointer transition">
             <div className="relative shrink-0">
