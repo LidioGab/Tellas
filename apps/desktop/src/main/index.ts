@@ -47,6 +47,7 @@ function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
+    show: true,
     title: 'Tellas — Compartilhamento de Tela',
     backgroundColor: '#090A0F',
     autoHideMenuBar: true,
@@ -62,6 +63,11 @@ function createWindow() {
 
   mainWindow.removeMenu();
   mainWindow.setMenuBarVisibility(false);
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
 
 
 
