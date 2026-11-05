@@ -252,7 +252,7 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     }
   });
 
-  app.post('/api/realtime/restore-publication', async (request, reply) => {
+  app.post<{ Body?: { announce?: boolean } }>('/api/realtime/restore-publication', async (request, reply) => {
     const auth = await authenticate(request, reply);
     if (!auth) return;
     const restored = restoreActivePublication(auth.session.roomId, auth.session.participantId, request.body?.announce !== false);
