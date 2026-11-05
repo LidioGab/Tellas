@@ -1397,7 +1397,7 @@ export const App: React.FC = () => {
         <div className="flex items-center gap-3">
           <AppUpdateControl mediaActive={isStreaming || watchModalOpen} />
 
-          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#35373C] cursor-pointer transition">
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md">
             <div className="relative shrink-0">
               <div className="w-6 h-6 rounded-full bg-[#5865F2] flex items-center justify-center text-[11px] font-bold text-white uppercase shadow-sm">
                 {isCameraLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : userName ? userName.charAt(0) : 'G'}
@@ -1405,7 +1405,6 @@ export const App: React.FC = () => {
               <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#23A55A] ring-2 ring-[#2B2D31]" />
             </div>
             <span className="text-xs font-medium text-[#F2F3F5] max-w-[120px] truncate">{userName}</span>
-            <ChevronDown className="w-3.5 h-3.5 text-[#949BA4]" />
           </div>
         </div>
       </header>
