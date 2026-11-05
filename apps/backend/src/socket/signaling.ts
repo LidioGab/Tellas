@@ -59,6 +59,34 @@ export function getRoomCount(): number {
   return rooms.size;
 }
 
+export function notifyCameraTrackChanged(roomId: string, participantId: string, active: boolean): void {
+  const room = rooms.get(roomId);
+  if (!room?.members.has(participantId)) return;
+  signalingServer?.to(roomId).emit('camera-track-updated', { participantId, active });
+}
+
+export function restoreActivePublication(roomId: string, participantId: string, announce = true): boolean {
+  const room = rooms.get(roomId);
+  const member = room?.members.get(participantId);
+  if (!room || !member || !member.canPublish) return false;
+  const wasActive = room.activeStreamers.has(participantId);
+  room.activeStreamers.add(participantId);
+  if (announce || !wasActive) {
+    signalingServer?.to(roomId).emit('stream-started', {
+      streamerSocketId: member.currentSocketId || '',
+      participantId,
+      identity: member.identity,
+    });
+  }
+  return true;
+}
+
+function sendActiveCameras(socket: Socket, roomId: string): void {
+  for (const participantId of cloudflareSessionRegistry.getCameraParticipantIds(roomId)) {
+    socket.emit('camera-track-updated', { participantId, active: true });
+  }
+}
+
 export function abandonActivePublication(roomId: string, participantId: string, reason: string): boolean {
   const room = rooms.get(roomId);
   if (!room) return false;
@@ -264,6 +292,18 @@ export function setupSignaling(io: SocketIOServer) {
     const clientIp = getSocketClientIp(socket);
     console.log(`[Socket] Connected: ${socket.id} (IP: ${clientIp})`);
 
+    socket.on('camera-loading', (payload: { roomId?: string; loading?: boolean } = {}) => {
+      const cleanRoomId = payload.roomId?.trim().toUpperCase();
+      const room = cleanRoomId ? rooms.get(cleanRoomId) : undefined;
+      const participantId = room?.socketToParticipant.get(socket.id);
+      const member = participantId ? room?.members.get(participantId) : undefined;
+      if (!room || !participantId || member?.currentSocketId !== socket.id) return;
+      socket.to(cleanRoomId!).emit('camera-loading', {
+        participantId,
+        loading: payload.loading === true,
+      });
+    });
+
     // ─── 1. Create Room ──────────────────────────────────────────────
     socket.on('create-room', async (payload: { roomId?: string; identity?: string }, callback) => {
       // Rate limit check: 5 create-room per minute per IP
@@ -458,6 +498,7 @@ export function setupSignaling(io: SocketIOServer) {
             room.socketToParticipant.set(socket.id, existingMember.participantId);
 
             socket.join(cleanRoomId);
+            sendActiveCameras(socket, cleanRoomId);
             console.log(
               `[Room] Reconnected participant ${existingMember.participantId} (${existingMember.identity}) in room ${cleanRoomId}`
             );
@@ -570,6 +611,7 @@ export function setupSignaling(io: SocketIOServer) {
         room.members.set(participantId, newMember);
         room.socketToParticipant.set(socket.id, participantId);
         socket.join(cleanRoomId);
+        sendActiveCameras(socket, cleanRoomId);
 
         console.log(`[Room] Participant ${participantId} (${identity}) joined room ${cleanRoomId}`);
         logInstanceEvent('PARTICIPANT_JOINED', {
@@ -769,10 +811,8 @@ export function setupSignaling(io: SocketIOServer) {
         }
 
         if (cloudflareSessionRegistry.getStream(participantId)) {
-          if (typeof callback === 'function') {
-            callback({ success: false, error: 'Encerre a publicação Cloudflare antes de anunciar stop-stream.' });
-          }
-          return;
+          console.warn(`[Stream] Removing stale screen publication state for ${participantId} in ${cleanRoomId}`);
+          cloudflareSessionRegistry.removeStream(participantId, 'client-stop-fallback');
         }
 
         // Stop ONLY the caller's own stream (preserves other streamers!)

@@ -5,29 +5,30 @@
 @tailwind utilities;
 
 :root {
-  --bg-main: #0B0D10;
-  --bg-secondary: #101217;
-  --surface: #16191F;
-  --surface-hover: #1D2129;
-  --surface-selected: #202530;
-  --border: #252A34;
-  --border-hover: #323846;
-  --text-primary: #F4F6F8;
-  --text-secondary: #9DA5B4;
-  --text-tertiary: #687180;
-  --text-muted: #505764;
-  --accent: #5B7CFA;
-  --accent-hover: #6C89FF;
-  --accent-active: #4F70EB;
-  --success: #34D399;
-  --danger: #F87171;
-  --warning: #FBBF24;
+  --bg-main: #313338;
+  --bg-sidebar: #2B2D31;
+  --bg-card: #1E1F22;
+  --surface: #2B2D31;
+  --surface-hover: #35373C;
+  --surface-selected: #404249;
+  --border: #383A40;
+  --border-hover: #4E5058;
+  --text-primary: #F2F3F5;
+  --text-secondary: #949BA4;
+  --text-tertiary: #80848E;
+  --text-muted: #6D6F78;
+  --accent: #5865F2;
+  --accent-hover: #4752C4;
+  --accent-active: #3C45A5;
+  --success: #23A55A;
+  --danger: #ED4245;
+  --warning: #FEE75C;
 }
 
 @layer base {
   body {
-    background-color: #0B0D10;
-    color: #F4F6F8;
+    background-color: #313338;
+    color: #F2F3F5;
     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     user-select: none;
     -webkit-font-smoothing: antialiased;

@@ -39,8 +39,15 @@ import {
   History,
   ArrowRight,
   ClipboardPaste,
-  Loader2
+  Loader2,
+  ChevronDown,
+  Video,
+  VideoOff,
+  MonitorUp,
+  Grid
 } from 'lucide-react';
+
+import { StageGrid } from './components/StageGrid';
 
 import { useLayoutMode } from './hooks/useLayoutMode';
 import { runAtomicPublishLifecycle, type PublishCommandResponse } from './services/publishLifecycle';
@@ -149,6 +156,7 @@ export const App: React.FC = () => {
   const [selectedSource, setSelectedSource] = useState<DesktopSource | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, RemoteStreamItem>>(new Map());
+  const [remoteCameraStreams, setRemoteCameraStreams] = useState<Map<string, MediaStream>>(new Map());
   const [activeStreamers, setActiveStreamers] = useState<Map<string, ActiveStreamerInfo>>(new Map());
   const [streamViewers, setStreamViewers] = useState<Map<string, StreamViewerInfo[]>>(new Map());
   const [isStreamLoading, setIsStreamLoading] = useState<boolean>(false);
@@ -161,6 +169,15 @@ export const App: React.FC = () => {
 
   // Quality preset
   const [qualityPreset, setQualityPreset] = useState<string>('1080p30');
+
+  // Camera & Grid View Mode (Discord-style stage)
+  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
+  const [isCameraLoading, setIsCameraLoading] = useState<boolean>(false);
+  const [cameraErrorMessage, setCameraErrorMessage] = useState<string | null>(null);
+  const [cameraLoadingParticipants, setCameraLoadingParticipants] = useState<Set<string>>(() => new Set());
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [stageViewMode, setStageViewMode] = useState<'grid' | 'focus'>('grid');
+  const [focusedStreamId, setFocusedStreamId] = useState<string | null>(null);
 
   // Device & layout classification (DESKTOP, MOBILE_PORTRAIT, MOBILE_LANDSCAPE)
   const { layoutMode, isFullscreen } = useLayoutMode();
@@ -239,7 +256,16 @@ export const App: React.FC = () => {
     setRoomId('');
     setMembers([]);
     setLocalStream(null);
+    setIsStreaming(false);
+    setIsStartingStream(false);
+    setSelectedSource(null);
+    setStreamingIdentity(null);
+    setIsCameraLoading(false);
+    setIsCameraActive(false);
+    localStreamRef.current = null;
+    setLocalStream(null);
     setRemoteStreams(new Map());
+    setRemoteCameraStreams(new Map());
     setActiveStreamers(new Map());
     setStreamViewers(new Map());
     setSelectedStreamParticipantId(null);
@@ -361,6 +387,16 @@ export const App: React.FC = () => {
     cloudflareRealtimeService.setCallbacks({
       onRemoteTrackSubscribed: (info: RemoteStreamInfo) => {
         const resolvedName = resolveDisplayName(info.participantId, info.displayName);
+        if (info.source === 'camera') {
+          setRemoteCameraStreams((prev) => new Map(prev).set(info.participantId, info.stream));
+          setCameraLoadingParticipants((prev) => {
+            if (!prev.has(info.participantId)) return prev;
+            const next = new Set(prev);
+            next.delete(info.participantId);
+            return next;
+          });
+          return;
+        }
         setRemoteStreams((prev) =>
           new Map(prev).set(info.participantId, {
             stream: info.stream,
@@ -370,12 +406,21 @@ export const App: React.FC = () => {
         );
         setStreamingIdentity(resolvedName);
       },
-      onRemoteTrackUnsubscribed: (participantId: string) => {
-        setRemoteStreams((prev) => {
-          const next = new Map(prev);
-          next.delete(participantId);
-          return next;
-        });
+      onRemoteTrackUnsubscribed: (participantId: string, source?: 'screen' | 'camera') => {
+        if (source === 'camera' || !source) {
+          setRemoteCameraStreams((prev) => {
+            const next = new Map(prev);
+            next.delete(participantId);
+            return next;
+          });
+        }
+        if (source === 'screen' || !source) {
+          setRemoteStreams((prev) => {
+            const next = new Map(prev);
+            next.delete(participantId);
+            return next;
+          });
+        }
         if (remoteStreams.size <= 1) setStreamingIdentity(null);
       },
       onConnectionStateChanged: () => undefined,
@@ -393,7 +438,16 @@ export const App: React.FC = () => {
         setIsStreaming(false);
         setSelectedSource(null);
       },
-      onSubscriptionFailed: (participantId: string, error: Error) => {
+      onSubscriptionFailed: (participantId: string, error: Error, cameraOnly = false) => {
+        if (cameraOnly) {
+          setCameraLoadingParticipants((prev) => {
+            const next = new Set(prev);
+            next.delete(participantId);
+            return next;
+          });
+          setCameraErrorMessage('Não foi possível receber a câmera deste participante. Tente novamente.');
+          return;
+        }
         if (participantId !== selectedStreamParticipantIdRef.current) return;
         setIsStreamLoading(false);
         setStreamError(error.message || 'Não foi possível conectar à transmissão.');
@@ -450,13 +504,34 @@ export const App: React.FC = () => {
         })
       );
       if (participantId) {
+        setCameraLoadingParticipants((prev) => {
+          if (!prev.has(participantId)) return prev;
+          const next = new Set(prev);
+          next.delete(participantId);
+          return next;
+        });
+        setRemoteStreams((prev) => {
+          if (!prev.has(participantId)) return prev;
+          const next = new Map(prev);
+          next.delete(participantId);
+          return next;
+        });
+        setRemoteCameraStreams((prev) => {
+          if (!prev.has(participantId)) return prev;
+          const next = new Map(prev);
+          next.delete(participantId);
+          return next;
+        });
         setActiveStreamers((prev) => {
           const next = new Map(prev);
           next.delete(participantId);
           return next;
         });
-        if (participantId === selectedStreamParticipantIdRef.current) {
+        if (participantId === selectedStreamParticipantIdRef.current
+          || cloudflareRealtimeService.subscribedParticipantId === participantId) {
           void cloudflareRealtimeService.unsubscribeFromParticipant(participantId, true, 'user-left');
+        }
+        if (participantId === selectedStreamParticipantIdRef.current) {
           setSelectedStreamParticipantId(null);
           setWatchModalOpen(false);
           setIsStreamLoading(false);
@@ -504,6 +579,18 @@ export const App: React.FC = () => {
     socket.on('stream-stopped', ({ participantId }: { participantId?: string } = {}) => {
       if (participantId) {
         if (import.meta.env.DEV) console.log('[CLOUDFLARE][TARGET_STREAM_STOPPED]', { participantId, wasCurrentTarget: participantId === selectedStreamParticipantIdRef.current });
+        setRemoteStreams((prev) => {
+          if (!prev.has(participantId)) return prev;
+          const next = new Map(prev);
+          next.delete(participantId);
+          return next;
+        });
+        setRemoteCameraStreams((prev) => {
+          if (!prev.has(participantId)) return prev;
+          const next = new Map(prev);
+          next.delete(participantId);
+          return next;
+        });
         setActiveStreamers((prev) => {
           const next = new Map(prev);
           next.delete(participantId);
@@ -514,20 +601,71 @@ export const App: React.FC = () => {
           next.delete(participantId);
           return next;
         });
+        if (cloudflareRealtimeService.subscribedParticipantId === participantId
+          && !cloudflareRealtimeService.cameraOnlySubscription) {
+          const cameraWasActive = remoteCameraStreams.has(participantId);
+          void cloudflareRealtimeService.unsubscribeFromParticipant(participantId, true, 'stream-stopped')
+            .then(() => cameraWasActive
+              ? cloudflareRealtimeService.subscribeToParticipant(participantId, true)
+              : undefined)
+            .catch((error) => console.warn('[App] Failed to retain camera subscription after screen stopped:', error));
+        }
         if (participantId === selectedStreamParticipantIdRef.current) {
-          void cloudflareRealtimeService.unsubscribeFromParticipant(participantId, true, 'stream-stopped');
           setSelectedStreamParticipantId(null);
           setWatchModalOpen(false);
           setIsStreamLoading(false);
         }
       } else {
+        setCameraLoadingParticipants(new Set());
         setActiveStreamers(new Map());
         setStreamViewers(new Map());
         setStreamViewers(new Map());
         void cloudflareRealtimeService.unsubscribeAll();
         setRemoteStreams(new Map());
+        setRemoteCameraStreams(new Map());
         setStreamingIdentity(null);
         setWatchModalOpen(false);
+      }
+    });
+
+    socket.on('camera-loading', ({ participantId, loading }: { participantId?: string; loading?: boolean } = {}) => {
+      if (!participantId || participantId === myParticipantId) return;
+      setCameraLoadingParticipants((prev) => {
+        const next = new Set(prev);
+        if (loading) next.add(participantId);
+        else next.delete(participantId);
+        return next;
+      });
+    });
+
+    socket.on('camera-track-updated', ({ participantId, active }: { participantId?: string; active?: boolean } = {}) => {
+      if (!participantId || participantId === myParticipantId) return;
+      const subscribedParticipantId = cloudflareRealtimeService.subscribedParticipantId;
+      if (active && subscribedParticipantId === participantId) {
+        void cloudflareRealtimeService.refreshSubscription(participantId)
+          .catch((error) => console.warn('[App] Failed to refresh camera subscription:', error));
+      } else if (active && !subscribedParticipantId) {
+        void ensureRoomMembershipReady()
+          .then(() => cloudflareRealtimeService.subscribeToParticipant(participantId, true))
+          .catch((error) => console.warn('[App] Failed to subscribe to remote camera:', error));
+      } else if (!active && subscribedParticipantId === participantId) {
+        setCameraLoadingParticipants((prev) => {
+          if (!prev.has(participantId)) return prev;
+          const next = new Set(prev);
+          next.delete(participantId);
+          return next;
+        });
+        if (cloudflareRealtimeService.cameraOnlySubscription) {
+          void cloudflareRealtimeService.unsubscribeFromParticipant(participantId);
+          setRemoteCameraStreams((prev) => {
+            const next = new Map(prev);
+            next.delete(participantId);
+            return next;
+          });
+        } else {
+          void cloudflareRealtimeService.refreshSubscription(participantId)
+            .catch((error) => console.warn('[App] Failed to refresh screen subscription:', error));
+        }
       }
     });
 
@@ -571,6 +709,8 @@ export const App: React.FC = () => {
       socket.off('room-members-updated');
       socket.off('stream-started');
       socket.off('stream-stopped');
+      socket.off('camera-loading');
+      socket.off('camera-track-updated');
       socket.off('stream-viewers-updated');
       socket.off('kicked-from-room');
       socket.off('room-lock-status-changed');
@@ -781,13 +921,22 @@ export const App: React.FC = () => {
     }
   }, [isJoiningRoom, joinRoom]);
 
-  const handleLeaveRoom = useCallback(async () => {
+  const handleLeaveRoom = useCallback(() => {
     roomMembershipReadyRef.current = false;
-    await handleStopStream();
-    await cloudflareRealtimeService.disconnect();
+    const stream = localStreamRef.current;
+    stream?.getTracks().forEach((track) => { track.onended = null; track.stop(); });
+    localStreamRef.current = null;
+    cameraStream?.getTracks().forEach((track) => track.stop());
+    audioCaptureManager.stop();
+    stoppingPublicationRef.current = false;
+
+    const disconnectPromise = cloudflareRealtimeService.disconnect();
     if (roomId) socket.emit('leave-room', { roomId });
     cloudflareRealtimeService.setSessionToken(null);
     cloudflareRealtimeService.setDiagnosticContext(null, null);
+    void disconnectPromise.catch((error) => {
+      console.warn('[App] Media cleanup completed with an error after leaving:', error);
+    });
     try {
       sessionStorage.removeItem('tellas_session_token');
       sessionStorage.removeItem('tellas_session_room');
@@ -799,7 +948,13 @@ export const App: React.FC = () => {
     setIsRoomLocked(false);
     setRoomId('');
     setMembers([]);
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((track) => track.stop());
+    }
+    setCameraStream(null);
+    setCameraLoadingParticipants(new Set());
     setRemoteStreams(new Map());
+    setRemoteCameraStreams(new Map());
     setActiveStreamers(new Map());
     setStreamViewers(new Map());
     setSelectedStreamParticipantId(null);
@@ -807,10 +962,64 @@ export const App: React.FC = () => {
     setStreamError(null);
     setStreamingIdentity(null);
     setWatchModalOpen(false);
-  }, [roomId]);
+  }, [roomId, cameraStream]);
 
-
-
+  const handleToggleCamera = useCallback(async () => {
+    if (isCameraLoading) return;
+    if (isCameraActive) {
+      try {
+        await cloudflareRealtimeService.setCameraTrack(null);
+      } catch (error) {
+        console.error('[Camera] Failed to unpublish camera:', error);
+      }
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((track) => track.stop());
+      }
+      setCameraStream(null);
+      setIsCameraActive(false);
+      socket.emit('camera-loading', { roomId, loading: false });
+    } else {
+      setIsCameraLoading(true);
+      let cameraPublished = false;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        socket.emit('camera-loading', { roomId, loading: true });
+        stream.getVideoTracks().forEach((track) => {
+          track.addEventListener('ended', () => {
+            void cloudflareRealtimeService.setCameraTrack(null).catch((error) => {
+              console.error('[Camera] Failed to unpublish ended camera track:', error);
+            });
+            setCameraStream((currentStream) => currentStream === stream ? null : currentStream);
+            setIsCameraActive(false);
+            socket.emit('camera-loading', { roomId, loading: false });
+          }, { once: true });
+        });
+        setCameraStream(stream);
+        setIsCameraActive(true);
+        if (stream.getVideoTracks()[0]) {
+          try {
+            await cloudflareRealtimeService.setCameraTrack(stream.getVideoTracks()[0]);
+            cameraPublished = true;
+          } catch (error) {
+            console.error('[Camera] Failed to publish camera:', error);
+            setCameraErrorMessage('A câmera foi ativada neste dispositivo, mas não foi possível enviá-la aos participantes.');
+          }
+        }
+      } catch (err) {
+        console.error('[Camera] Could not access camera:', err);
+        const message = err instanceof Error && err.name === 'NotAllowedError'
+          ? 'Permita o acesso à câmera nas configurações do navegador ou do Windows.'
+          : 'Não foi possível acessar uma câmera. Verifique se ela está conectada e disponível.';
+        setCameraErrorMessage(message);
+      } finally {
+        setIsCameraLoading(false);
+        if (!cameraPublished) socket.emit('camera-loading', { roomId, loading: false });
+      }
+    }
+  }, [isCameraActive, isCameraLoading, cameraStream]);
 
   const copyRoomCode = useCallback(() => {
     navigator.clipboard.writeText(roomId);
@@ -834,21 +1043,30 @@ export const App: React.FC = () => {
     setIsStreaming(false);
     setSelectedSource(null);
 
+    let unpublishError: unknown = null;
     try {
       await cloudflareRealtimeService.unpublishAllTracks();
+    } catch (error) {
+      unpublishError = error;
+      console.error('[App] Failed to unpublish Cloudflare tracks; signaling stop anyway:', error);
+    }
+
+    try {
       if (roomId) {
         const response = await emitStopStreamCommand(roomId);
         if (!response.success) throw new Error(response.error || 'Não foi possível encerrar a transmissão atual.');
       }
+      if (unpublishError) {
+        console.warn('[App] Screen publication state cleared; remote media cleanup may finish asynchronously.');
+      }
+      return true;
     } catch (error) {
-      console.error('[App] Failed to stop Cloudflare publication:', error);
-      alert(error instanceof Error ? error.message : 'Não foi possível encerrar a publicação na Cloudflare.');
+      console.error('[App] Failed to announce stopped stream:', error);
+      alert(error instanceof Error ? error.message : 'Não foi possível atualizar o estado da transmissão.');
       return false;
     } finally {
       stoppingPublicationRef.current = false;
     }
-
-    return true;
   };
 
   const startStreamingViaCloudflare = async (videoStream: MediaStream) => {
@@ -1101,12 +1319,20 @@ export const App: React.FC = () => {
 
   const handleStopWatch = useCallback(async () => {
     const target = selectedStreamParticipantIdRef.current;
-    if (target) await cloudflareRealtimeService.unsubscribeFromParticipant(target);
+    const cameraWasActive = target ? remoteCameraStreams.has(target) : false;
+    if (target) {
+      await cloudflareRealtimeService.unsubscribeFromParticipant(target);
+      if (cameraWasActive) {
+        await cloudflareRealtimeService.subscribeToParticipant(target, true).catch((error) => {
+          console.warn('[App] Failed to resume camera-only subscription:', error);
+        });
+      }
+    }
     setSelectedStreamParticipantId(null);
     setWatchModalOpen(false);
     setIsStreamLoading(false);
     setStreamError(null);
-  }, []);
+  }, [remoteCameraStreams]);
 
   const currentPreset = VIDEO_QUALITY_PRESETS[qualityPreset];
 
@@ -1115,40 +1341,51 @@ export const App: React.FC = () => {
     ? [selectedStreamParticipantId, remoteStreams.get(selectedStreamParticipantId)!] as [string, RemoteStreamItem]
     : null;
 
-  return (
-    <div className="flex flex-col h-screen bg-[#0B0D10] text-[#F4F6F8] select-none font-sans overflow-hidden">
+  const displayStreamersList = React.useMemo(() => {
+    const list: Array<{ id: string; displayName: string }> = [];
+    if (isStreaming) {
+      list.push({ id: 'local', displayName: userName });
+    }
+    activeStreamers.forEach((item, pid) => {
+      list.push({ id: pid, displayName: item.displayName });
+    });
+    return list;
+  }, [isStreaming, userName, activeStreamers]);
 
-      {/* ── Topbar (Height: 48px) ────────────────────────────────────── */}
-      <header className="h-12 px-4 bg-[#101217] border-b border-[#1D2129] flex items-center justify-between z-30 shrink-0">
-        {/* Left: Branding & Room info */}
-        <div className="flex items-center gap-2.5">
-          <TellasLogo className="w-6 h-6" />
-          <span className="font-semibold text-sm text-[#F4F6F8] tracking-tight">Tellas</span>
+  return (
+    <div className="flex flex-col h-screen bg-[#313338] text-[#F2F3F5] select-none font-sans overflow-hidden">
+
+      {/* ── Topbar (Height: 44px, matching reference) ────────────────────── */}
+      <header className="h-11 px-4 bg-[#2B2D31] flex items-center justify-between z-30 shrink-0 border-b border-[#202225]/40 select-none">
+        {/* Left: Tellas / {RoomId} */}
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-sm text-[#F2F3F5] tracking-tight">Tellas</span>
           {isInRoom && (
-            <div className="flex items-center gap-1.5 ml-1">
-              <span className="text-[#505764] text-xs">/</span>
+            <div className="flex items-center gap-1.5 ml-0.5">
+              <span className="text-[#80848E] text-xs">/</span>
               <button
                 onClick={copyRoomCode}
-                className="flex items-center gap-1 text-xs text-[#9DA5B4] hover:text-[#F4F6F8] transition font-mono tracking-wider"
+                className="flex items-center gap-1 text-xs text-[#DBDEE1] hover:text-white transition font-mono tracking-wider"
                 title="Clique para copiar o código da sala"
               >
                 {roomId}
-                {copied ? <Check className="w-3 h-3 text-[#34D399]" /> : <Copy className="w-3 h-3 text-[#687180]" />}
+                {copied ? <Check className="w-3 h-3 text-[#23A55A]" /> : <Copy className="w-3 h-3 text-[#80848E]" />}
               </button>
               {isHost ? (
                 <button
                   onClick={handleToggleRoomLock}
-                  title={isRoomLocked ? 'Sala trancada (clique para abrir)' : 'Sala aberta (clique para trancar)'}
-                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${isRoomLocked
-                    ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30 hover:bg-[#F87171]/25'
-                    : 'bg-[#34D399]/15 text-[#34D399] border border-[#34D399]/30 hover:bg-[#34D399]/25'
-                    }`}
+                  title={isRoomLocked ? 'Sala trancada' : 'Sala aberta'}
+                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${
+                    isRoomLocked
+                      ? 'bg-[#ED4245]/15 text-[#ED4245] border border-[#ED4245]/30'
+                      : 'bg-[#23A55A]/15 text-[#23A55A] border border-[#23A55A]/30'
+                  }`}
                 >
                   {isRoomLocked ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
                   {isRoomLocked ? 'Trancada' : 'Aberta'}
                 </button>
               ) : isRoomLocked ? (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30">
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#ED4245]/15 text-[#ED4245] border border-[#ED4245]/30">
                   <Lock className="w-2.5 h-2.5" /> Trancada
                 </span>
               ) : null}
@@ -1156,63 +1393,58 @@ export const App: React.FC = () => {
           )}
         </div>
 
-
-        {/* Right: User Profile & Leave Action */}
-        <div className="flex items-center gap-2">
+        {/* Right: Version & Profile with dropdown */}
+        <div className="flex items-center gap-3">
           <AppUpdateControl mediaActive={isStreaming || watchModalOpen} />
-          <div className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-[#16191F] transition">
-            <div className="w-5 h-5 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-bold text-[#F4F6F8] uppercase">
-              {userName ? userName.charAt(0) : 'U'}
-            </div>
-            <span className="hidden sm:block text-xs font-medium text-[#F4F6F8] max-w-[100px] truncate">{userName}</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-[#34D399] shrink-0" />
-          </div>
+          <span className="text-xs text-[#949BA4] font-medium hidden sm:inline">
+            Tellas Desktop v1.0.9
+          </span>
 
-          {isInRoom && (
-            <button
-              onClick={handleLeaveRoom}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#F87171]/10 hover:bg-[#F87171]/20 border border-[#F87171]/20 text-[#F87171] transition text-xs font-medium"
-            >
-              <LogOut className="w-3 h-3" />
-              <span className="hidden sm:inline">Sair</span>
-            </button>
-          )}
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#35373C] cursor-pointer transition">
+            <div className="relative shrink-0">
+              <div className="w-6 h-6 rounded-full bg-[#5865F2] flex items-center justify-center text-[11px] font-bold text-white uppercase shadow-sm">
+                {isCameraLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : userName ? userName.charAt(0) : 'G'}
+              </div>
+              <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#23A55A] ring-2 ring-[#2B2D31]" />
+            </div>
+            <span className="text-xs font-medium text-[#F2F3F5] max-w-[120px] truncate">{userName}</span>
+            <ChevronDown className="w-3.5 h-3.5 text-[#949BA4]" />
+          </div>
         </div>
       </header>
 
       {/* ── Main Workspace ───────────────────────────────────────────── */}
-      <main className="flex-1 overflow-hidden relative bg-[#0B0D10]">
+      <main className="flex-1 overflow-hidden relative bg-[#313338]">
         {!isInRoom ? (
           /* ── Landing / Login Screen ─────────────────────────────────── */
           <div className="h-full flex items-center justify-center p-4">
-            <div className="w-full max-w-sm bg-[#16191F] p-7 rounded-xl border border-[#252A34] shadow-card space-y-5">
+            <div className="w-full max-w-sm bg-[#2B2D31] p-7 rounded-2xl border border-[#383A40] shadow-2xl space-y-5">
 
               {/* Header Icon & Title */}
               <div className="text-center space-y-2">
                 <div className="flex justify-center mb-1">
                   <TellasLogo className="w-14 h-14" glow />
                 </div>
-                <h1 className="text-xl font-bold text-[#F4F6F8] tracking-tight">Tellas</h1>
-                <p className="text-xs text-[#9DA5B4]">
+                <h1 className="text-xl font-bold text-[#F2F3F5] tracking-tight">Tellas</h1>
+                <p className="text-xs text-[#949BA4]">
                   Compartilhamento de tela em tempo real com áudio isolado.
                 </p>
               </div>
 
-
               {/* Display Name Input */}
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#687180]">
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-[#949BA4]">
                   Seu nome de exibição
                 </label>
                 <div className="relative flex items-center">
-                  <User className="absolute left-3 w-3.5 h-3.5 text-[#687180]" />
+                  <User className="absolute left-3 w-3.5 h-3.5 text-[#80848E]" />
                   <input
                     type="text"
                     placeholder="Ex: Gabriel"
                     value={userName}
                     onChange={(e) => handleNameChange(e.target.value)}
                     maxLength={25}
-                    className="w-full pl-8 pr-3 py-2 rounded-lg bg-[#101217] text-[#F4F6F8] text-xs placeholder:text-[#505764] focus:outline-none focus:border-[#5B7CFA] border border-[#252A34] transition"
+                    className="w-full pl-8 pr-3 py-2.5 rounded-lg bg-[#1E1F22] text-[#F2F3F5] text-xs placeholder:text-[#6D6F78] focus:outline-none focus:border-[#5865F2] border border-[#383A40] transition"
                   />
                 </div>
               </div>
@@ -1220,7 +1452,7 @@ export const App: React.FC = () => {
               {/* Create Room Button */}
               <button
                 onClick={handleCreateRoom}
-                className="w-full py-2.5 px-4 rounded-lg bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] font-medium text-white text-xs shadow-cta flex items-center justify-center gap-1.5 transition transform hover:-translate-y-0.5 active:translate-y-0"
+                className="w-full py-2.5 px-4 rounded-lg bg-[#5865F2] hover:bg-[#4752C4] active:bg-[#3C45A5] font-semibold text-white text-xs shadow-md flex items-center justify-center gap-1.5 transition transform active:scale-95"
               >
                 <PlusCircle className="w-3.5 h-3.5" />
                 Criar Nova Sala
@@ -1228,8 +1460,8 @@ export const App: React.FC = () => {
 
               {/* Subtle Divider */}
               <div className="relative flex items-center justify-center my-2">
-                <div className="border-t border-[#252A34] w-full"></div>
-                <span className="bg-[#16191F] px-2.5 text-[10px] text-[#687180] uppercase tracking-wider font-semibold absolute">
+                <div className="border-t border-[#383A40] w-full"></div>
+                <span className="bg-[#2B2D31] px-2.5 text-[10px] text-[#949BA4] uppercase tracking-wider font-semibold absolute">
                   ou entrar com código
                 </span>
               </div>
@@ -1434,7 +1666,7 @@ export const App: React.FC = () => {
                   <div className="flex items-center gap-2.5 px-3 py-2.5">
                     <div className="relative shrink-0">
                       <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-bold text-[#F4F6F8] uppercase">
-                        {userName ? userName.charAt(0) : 'U'}
+                        {isCameraLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : userName ? userName.charAt(0) : 'U'}
                       </div>
                       <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#16191F]" />
                     </div>
@@ -1467,7 +1699,9 @@ export const App: React.FC = () => {
                         >
                           <div className="relative shrink-0">
                             <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-medium text-[#9DA5B4] uppercase">
-                              {member.identity ? member.identity.charAt(0) : 'C'}
+                              {member.participantId && cameraLoadingParticipants.has(member.participantId)
+                                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                : member.identity ? member.identity.charAt(0) : 'C'}
                             </div>
                             <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#16191F]" />
                           </div>
@@ -1512,11 +1746,9 @@ export const App: React.FC = () => {
                               </button>
                             </div>
                           )}
-
                         </div>
                       );
                     })}
-
                 </div>
               </div>
             </div>
@@ -1524,257 +1756,163 @@ export const App: React.FC = () => {
         ) : (
           /* ── 3. Desktop Layout (>= 768px): Sidebar + Stage ───────────── */
           <div className="h-full flex overflow-hidden">
-            {/* ── Left Sidebar (Width: 240px) ─────────────────────────── */}
-            <aside className="w-60 shrink-0 bg-[#101217] border-r border-[#1D2129] flex flex-col overflow-hidden">
-              {/* Active Streamers Cards (Multi-stream support) */}
-              {Array.from(activeStreamers.entries()).map(([participantId, item]) => (
-                <div key={participantId} className="mx-3 mt-2.5 p-2.5 rounded-lg bg-[#16191F] border border-[#252A34] shadow-subtle flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="w-2 h-2 rounded-full bg-[#F87171] shrink-0" />
-                    <div className="truncate">
-                      <p className="text-xs font-medium text-[#F4F6F8] truncate leading-tight">
-                        {item.displayName}
-                      </p>
-                      <p className="text-[11px] text-[#687180]">Transmitindo</p>
-                    </div>
-                  </div>
+            {/* ── Left Sidebar (Width: 230px, Fundo #2B2D31) ─────────────── */}
+            <aside className="w-56 shrink-0 bg-[#2B2D31] flex flex-col justify-between overflow-hidden select-none border-r border-[#202225]/40">
+              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
+                {/* 1. PARTICIPANTES Section */}
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#949BA4] px-1 mb-2">
+                    PARTICIPANTES
+                  </p>
 
-                  <button
-                    onClick={() => void handleWatchStream(participantId)}
-                    className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#5B7CFA]/12 hover:bg-[#5B7CFA]/18 border border-[#5B7CFA]/20 text-[#8FA5FF] text-[11px] font-medium transition"
-                  >
-                    <Play className="w-2.5 h-2.5 fill-current" />
-                    Assistir
-                  </button>
-                </div>
-              ))}
-
-              {/* Participants List */}
-              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180] px-1 mb-2">
-                  Participantes — {Math.max(1, members.length)}
-                </p>
-
-                {/* Self */}
-                <div className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#16191F] transition">
-                  <div className="relative shrink-0">
-                    <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-bold text-[#F4F6F8] uppercase">
-                      {userName ? userName.charAt(0) : 'U'}
-                    </div>
-                    <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#101217]" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-[#F4F6F8] truncate">
-                      {userName} <span className="text-[#687180] font-normal">(você)</span>
-                    </p>
-                    <div className="flex items-center gap-1.5">
-                      {isHost && (
-                        <span className="text-[10px] text-[#FBBF24] flex items-center gap-0.5 font-medium">
-                          <Crown className="w-2.5 h-2.5" /> Host
-                        </span>
-                      )}
-                      {isStreaming && (
-                        <span className="text-[10px] text-[#F87171] flex items-center gap-0.5 font-medium">
-                          <Radio className="w-2.5 h-2.5" /> Ao vivo
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Remote Members */}
-                {members
-                  .filter((m) => (myParticipantId && m.participantId ? m.participantId !== myParticipantId : m.socketId !== socket.id))
-                  .map((member) => {
-                    const isStreamer = !!(member.participantId && activeStreamers.has(member.participantId));
-                    return (
-                      <div
-                        key={member.participantId || member.socketId}
-                        className="group flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#16191F] transition"
-                      >
-                        <div className="relative shrink-0">
-                          <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-medium text-[#9DA5B4] uppercase">
-                            {member.identity ? member.identity.charAt(0) : 'C'}
+                  <div className="space-y-1">
+                    {members.length === 0 && (
+                      <p className="px-2 py-1.5 text-xs text-[#949BA4]">Nenhum participante conectado</p>
+                    )}
+                    {members.map((member, idx) => {
+                      const isSelf = member.identity === userName;
+                      return (
+                        <div
+                          key={member.participantId || member.socketId || `${member.identity}-${idx}`}
+                          className="group flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#35373C] transition cursor-pointer"
+                        >
+                          <div className="relative shrink-0">
+                            <div className="w-7 h-7 rounded-full bg-[#1E1F22] flex items-center justify-center text-[11px] font-bold text-white uppercase overflow-hidden border border-white/10">
+                                {member.participantId && cameraLoadingParticipants.has(member.participantId)
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  : member.identity ? member.identity.charAt(0) : 'U'}
+                            </div>
+                            <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#23A55A] ring-2 ring-[#2B2D31]" />
                           </div>
-                          <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#101217]" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-medium text-[#9DA5B4] truncate">{member.identity}</p>
-                          <div className="flex items-center gap-1.5">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-medium text-[#DBDEE1] truncate leading-tight">
+                              {member.identity} {isSelf && <span className="text-[#949BA4] font-normal">(você)</span>}
+                            </p>
                             {member.isHost && (
-                              <span className="text-[10px] text-[#FBBF24] flex items-center gap-0.5 font-medium">
-                                <Crown className="w-2.5 h-2.5" /> Host
-                              </span>
-                            )}
-                            {isStreamer && (
-                              <span className="text-[10px] text-[#F87171] flex items-center gap-0.5 font-medium">
-                                <Radio className="w-2.5 h-2.5" /> Ao vivo
-                              </span>
+                              <p className="text-[10px] text-[#949BA4] font-medium leading-tight">Host</p>
                             )}
                           </div>
+
+                          {/* Host Controls for Remote Member */}
+                          {isHost && !isSelf && (
+                            <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 shrink-0 transition">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenTransferModal(member.participantId, member.socketId, member.identity);
+                                }}
+                                title="Tornar Host"
+                                className="p-1 rounded hover:bg-[#404249] text-[#FEE75C]"
+                              >
+                                <Crown className="w-3 h-3" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenKickModal(member.participantId, member.socketId, member.identity);
+                                }}
+                                title="Expulsar"
+                                className="p-1 rounded hover:bg-[#404249] text-[#ED4245]"
+                              >
+                                <UserX className="w-3 h-3" />
+                              </button>
+                            </div>
+                          )}
                         </div>
+                      );
+                    })}
+                  </div>
+                </div>
 
-                        {/* Host Controls for Remote Member */}
-                        {isHost && (
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenTransferModal(member.participantId, member.socketId, member.identity);
-                              }}
-                              title="Tornar Host da sala"
-                              className="p-1 rounded bg-[#FBBF24]/10 hover:bg-[#FBBF24]/20 text-[#FBBF24] transition flex items-center justify-center"
-                            >
-                              <Crown className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenKickModal(member.participantId, member.socketId, member.identity);
-                              }}
-                              title="Expulsar da sala"
-                              className="p-1 rounded bg-[#F87171]/10 hover:bg-[#F87171]/20 text-[#F87171] transition flex items-center justify-center"
-                            >
-                              <UserX className="w-3.5 h-3.5" />
-                            </button>
+                {/* 2. TRANSMISSÕES Section */}
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#949BA4] px-1 mb-2">
+                    TRANSMISSÕES
+                  </p>
+
+                  <div className="space-y-1">
+                    {displayStreamersList.length === 0 && (
+                      <p className="px-2 py-1.5 text-xs text-[#949BA4]">Nenhuma transmissão ativa</p>
+                    )}
+                    {displayStreamersList.map((streamer, idx) => {
+                      const isSelected =
+                        (selectedStreamParticipantId === streamer.id) ||
+                        (focusedStreamId === streamer.id) ||
+                        (idx === 0 && !selectedStreamParticipantId && !focusedStreamId);
+
+                      return (
+                        <div
+                          key={streamer.id}
+                          onClick={() => {
+                            if (streamer.id !== 'local') {
+                              void handleWatchStream(streamer.id);
+                            }
+                            setFocusedStreamId(streamer.id);
+                          }}
+                          className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#35373C] text-white shadow-sm'
+                              : 'text-[#DBDEE1] hover:bg-[#35373C]/60 hover:text-white'
+                          }`}
+                        >
+                          <div className="w-6 h-6 rounded-full bg-[#1E1F22] flex items-center justify-center text-[10px] font-bold text-white shrink-0 overflow-hidden border border-white/10">
+                            {streamer.displayName.charAt(0)}
                           </div>
-                        )}
-
-                      </div>
-                    );
-                  })}
+                          <span className="text-xs font-medium truncate flex-1">
+                            {streamer.displayName} <span className="text-[11px] text-[#949BA4] font-normal">(Ao vivo)</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
-
-
-              {/* Bottom Stream Controls (always available when local user is not streaming) */}
-
-
-              {!isStreaming && (
-                <div className="p-3 border-t border-[#1D2129] space-y-2">
-                  <div className="flex items-center gap-1 bg-[#16191F] px-2 py-1 rounded-md border border-[#252A34]">
-                    <Settings className="w-3 h-3 text-[#687180]" />
-                    <select
-                      value={qualityPreset}
-                      onChange={(e) => handleQualityChange(e.target.value)}
-                      className="bg-transparent text-[#9DA5B4] focus:outline-none cursor-pointer text-[11px] flex-1"
-                    >
-                      {Object.entries(VIDEO_QUALITY_PRESETS).map(([key, preset]) => (
-                        <option key={key} value={key} className="bg-[#101217] text-[#F4F6F8]">
-                          {preset.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <button
-                    onClick={handleOpenSharePicker}
-                    className="w-full py-2 rounded-md bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white text-xs font-medium flex items-center justify-center gap-1.5 shadow-cta transition"
-                  >
-                    <Monitor className="w-3.5 h-3.5" />
-                    Transmitir Tela
-                  </button>
-                </div>
-              )}
             </aside>
 
-            {/* ── Main Stage Area ──────────────────────────────────────── */}
-            <div className="flex-1 flex flex-col overflow-hidden bg-[#0B0D10]">
+            {/* ── Main Stage Area: StageGrid ──────────────────────────── */}
+            <div className="flex-1 flex flex-col overflow-hidden bg-[#313338] relative">
               {/* Audio warning banner */}
               {audioWarningMessage && (
-                <div className="mx-4 mt-3 flex flex-col gap-1.5 bg-[#FBBF24]/10 border border-[#FBBF24]/20 rounded-lg px-3.5 py-2 text-xs text-[#FBBF24]">
+                <div className="mx-4 mt-3 flex flex-col gap-1.5 bg-[#FEE75C]/15 border border-[#FEE75C]/30 rounded-lg px-3.5 py-2 text-xs text-[#FEE75C] z-20">
                   <div className="flex items-center gap-2.5">
                     <AlertTriangle className="w-4 h-4 shrink-0" />
                     <span className="flex-1">{audioWarningMessage}</span>
-                    <button onClick={() => setAudioWarningMessage(null)} className="text-[#FBBF24]/60 hover:text-[#FBBF24]">
+                    <button onClick={() => setAudioWarningMessage(null)} className="text-[#FEE75C]/60 hover:text-[#FEE75C]">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  {diagnosticLogPath && (
-                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#FBBF24]/15 text-[11px] text-[#EDEFF3]/80">
-                      <span className="truncate">Diagnóstico: <code className="text-[#FBBF24]">{diagnosticLogPath.split(/[\/\\]/).pop()}</code></span>
-                      {window.electronAPI?.openAudioDiagnosticFolder && (
-                        <button
-                          onClick={() => window.electronAPI.openAudioDiagnosticFolder()}
-                          className="shrink-0 px-2 py-0.5 rounded bg-[#16191F] border border-[#252A34] hover:bg-[#1D2129] text-[#EDEFF3] transition text-[10px]"
-                        >
-                          Abrir Pasta de Logs
-                        </button>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
 
-              {/* Stage Content */}
-              <div className="flex-1 overflow-hidden p-4">
-                {isStreaming ? (
-                  /* Publisher Stream Stage */
-                  <div className="h-full">
-                    <StreamPublisher
-                      source={selectedSource}
-                      localStream={localStream}
-                      qualityPreset={currentPreset}
-                      streamerName={userName}
-                      viewers={streamViewers.get(myParticipantId) || []}
-                      onStopStream={handleStopStream}
-                      onChangeSource={handleOpenSharePicker}
-                    />
-                  </div>
-                ) : (
-                  /* Clean Stage State */
-                  <div className="h-full flex flex-col items-center justify-center text-center gap-3">
-                    <div className="w-14 h-14 rounded-2xl bg-[#15181E] border border-[#252A34] flex items-center justify-center shadow-subtle">
-                      <Tv className="w-6 h-6 text-[#828A98]" />
-                    </div>
-
-                    <div>
-                      <h3 className="text-[17px] font-semibold text-[#EDEFF3]">
-                        {hasAnyActiveStreamer
-                          ? activeStreamers.size === 1
-                            ? `${Array.from(activeStreamers.values())[0]?.displayName || 'Alguém'} está transmitindo`
-                            : `${activeStreamers.size} transmissões ao vivo disponíveis`
-                          : 'Nenhuma transmissão ativa'}
-                      </h3>
-                      <p className="text-xs text-[#737C8A] mt-1 max-w-[340px] leading-relaxed">
-                        {hasAnyActiveStreamer
-                          ? 'Você pode assistir ou iniciar seu compartilhamento simultaneamente.'
-                          : 'Compartilhe sua tela para começar.'}
-                      </p>
-                    </div>
-
-                    <div className="flex flex-col items-center gap-2.5 mt-1">
-                      {hasAnyActiveStreamer && (
-                        <div className="flex items-center gap-2 flex-wrap justify-center">
-                          {Array.from(activeStreamers.entries()).map(([participantId, item]) => (
-                            <button
-                              key={participantId}
-                              onClick={() => void handleWatchStream(participantId)}
-                              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white font-medium text-xs shadow-cta transition transform hover:-translate-y-0.5"
-                            >
-                              <Play className="w-3.5 h-3.5 fill-white" />
-                              Assistir {item.displayName}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleOpenSharePicker}
-                          className={`px-4 py-1.5 rounded-md font-medium text-xs flex items-center gap-1.5 transition ${hasAnyActiveStreamer
-                              ? 'bg-[#16191F] hover:bg-[#1D2129] border border-[#252A34] hover:border-[#5B7CFA] text-[#F4F6F8]'
-                              : 'bg-[#5B7CFA] hover:bg-[#6C89FF] active:bg-[#4F70EB] text-white shadow-cta'
-                            }`}
-                        >
-                          <Monitor className="w-3.5 h-3.5" />
-                          {hasAnyActiveStreamer ? 'Transmitir também' : 'Transmitir Tela'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+              <StageGrid
+                members={members}
+                currentUser={{
+                  name: userName,
+                  isHost: isHost,
+                  participantId: myParticipantId,
+                }}
+                cameraStream={cameraStream}
+                isCameraActive={isCameraActive}
+                isCameraLoading={isCameraLoading}
+                cameraLoadingParticipants={cameraLoadingParticipants}
+                localStream={localStream}
+                isStreaming={isStreaming}
+                remoteStreams={remoteStreams}
+                remoteCameraStreams={remoteCameraStreams}
+                activeStreamers={activeStreamers}
+                streamViewers={streamViewers}
+                viewMode={stageViewMode}
+                focusedStreamId={focusedStreamId}
+                qualityPreset={qualityPreset}
+                onWatchStream={(pid) => void handleWatchStream(pid)}
+                onToggleCamera={handleToggleCamera}
+                onToggleScreenShare={isStreaming ? handleStopStream : handleOpenSharePicker}
+                onChangeQuality={handleQualityChange}
+                onLeaveRoom={handleLeaveRoom}
+                onToggleViewMode={setStageViewMode}
+                onSelectFocus={setFocusedStreamId}
+              />
             </div>
           </div>
         )}
@@ -1872,6 +2010,40 @@ export const App: React.FC = () => {
             <div>
               <p className="text-sm font-semibold text-[#F4F6F8]">Preparando transmissão...</p>
               <p className="mt-0.5 text-xs text-[#9DA5B4]">Conectando áudio e vídeo.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cameraErrorMessage && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={(event) => { if (event.target === event.currentTarget) setCameraErrorMessage(null); }}
+        >
+          <div className="w-full max-w-sm rounded-xl border border-[#F87171]/30 bg-[#16191F] p-5 shadow-2xl animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#F87171]/30 bg-[#F87171]/15 text-[#F87171]">
+                <VideoOff className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-[#F4F6F8]">Câmera indisponível</h3>
+                <p className="mt-1 text-xs leading-relaxed text-[#9DA5B4]">{cameraErrorMessage}</p>
+              </div>
+              <button
+                onClick={() => setCameraErrorMessage(null)}
+                title="Fechar"
+                className="rounded-md p-1 text-[#687180] transition hover:bg-[#252A34] hover:text-[#F4F6F8]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-4 flex justify-end border-t border-[#252A34] pt-3">
+              <button
+                onClick={() => setCameraErrorMessage(null)}
+                className="rounded-lg bg-[#5865F2] px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-[#4752C4]"
+              >
+                Entendi
+              </button>
             </div>
           </div>
         </div>

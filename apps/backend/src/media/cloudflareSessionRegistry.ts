@@ -15,11 +15,21 @@ export interface ActiveCloudflareStream {
   audioMid: string | null;
 }
 
+export interface ActiveCloudflareCamera {
+  participantId: string;
+  roomId: string;
+  cloudflareSessionId: string;
+  trackId: string;
+  mid: string;
+}
+
 export interface ActiveSubscription {
   viewerParticipantId: string;
   targetParticipantId: string;
   roomId: string;
   remoteMids: string[];
+  remoteTrackSources: Record<string, 'screen' | 'camera' | 'audio'>;
+  cameraOnly?: boolean;
 }
 
 const DEV = process.env.NODE_ENV !== 'production';
@@ -27,6 +37,7 @@ const DEV = process.env.NODE_ENV !== 'production';
 class CloudflareSessionRegistry {
   private readonly sessions = new Map<string, ParticipantMediaSession>();
   private readonly streams = new Map<string, ActiveCloudflareStream>();
+  private readonly cameras = new Map<string, ActiveCloudflareCamera>();
   private readonly subscriptions = new Map<string, ActiveSubscription>();
   private readonly pendingSubscriptions = new Set<string>();
   private subscriptionChangeListener: ((roomId: string, targetParticipantId: string) => void) | null = null;
@@ -37,7 +48,7 @@ class CloudflareSessionRegistry {
 
   getViewerParticipantIds(targetParticipantId: string): string[] {
     return Array.from(this.subscriptions.values())
-      .filter((subscription) => subscription.targetParticipantId === targetParticipantId)
+      .filter((subscription) => subscription.targetParticipantId === targetParticipantId && !subscription.cameraOnly)
       .map((subscription) => subscription.viewerParticipantId);
   }
 
@@ -79,6 +90,33 @@ class CloudflareSessionRegistry {
     return this.streams.get(participantId);
   }
 
+  setCamera(camera: ActiveCloudflareCamera): void {
+    this.cameras.set(camera.participantId, camera);
+    if (DEV) console.log('[CLOUDFLARE][CAMERA_TRACK_SET]', {
+      participantId: camera.participantId,
+      roomId: camera.roomId,
+      sessionId: camera.cloudflareSessionId,
+      trackId: camera.trackId,
+      mid: camera.mid,
+    });
+  }
+
+  getCamera(participantId: string): ActiveCloudflareCamera | undefined {
+    return this.cameras.get(participantId);
+  }
+
+  getCameraParticipantIds(roomId: string): string[] {
+    return Array.from(this.cameras.values())
+      .filter((camera) => camera.roomId === roomId)
+      .map((camera) => camera.participantId);
+  }
+
+  removeCamera(participantId: string): ActiveCloudflareCamera | undefined {
+    const camera = this.cameras.get(participantId);
+    this.cameras.delete(participantId);
+    return camera;
+  }
+
   removeStream(participantId: string, reason = 'explicit-cleanup'): void {
     const stream = this.streams.get(participantId);
     this.streams.delete(participantId);
@@ -117,6 +155,7 @@ class CloudflareSessionRegistry {
   removeParticipant(participantId: string, reason = 'disconnect'): void {
     const session = this.sessions.get(participantId);
     const wasPublisher = this.streams.has(participantId);
+    const hadCamera = this.cameras.has(participantId);
     const hadViewers = Array.from(this.subscriptions.values())
       .some((subscription) => subscription.targetParticipantId === participantId);
     if (DEV && session) console.log('[CLOUDFLARE][SESSION_REGISTRY_DELETE]', {
@@ -127,6 +166,7 @@ class CloudflareSessionRegistry {
     });
     this.sessions.delete(participantId);
     this.streams.delete(participantId);
+    this.cameras.delete(participantId);
     const ownSubscription = this.subscriptions.get(participantId);
     this.subscriptions.delete(participantId);
     this.pendingSubscriptions.delete(participantId);
@@ -137,11 +177,15 @@ class CloudflareSessionRegistry {
     if (session && (wasPublisher || hadViewers)) {
       this.subscriptionChangeListener?.(session.roomId, participantId);
     }
+    if (session && hadCamera) {
+      this.subscriptionChangeListener?.(session.roomId, participantId);
+    }
   }
 
   reset(): void {
     this.sessions.clear();
     this.streams.clear();
+    this.cameras.clear();
     this.subscriptions.clear();
     this.pendingSubscriptions.clear();
   }

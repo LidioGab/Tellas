@@ -16,6 +16,12 @@ export default defineConfig({
               // Main process entry point
               entry: path.resolve(__dirname, 'src/main/index.ts'),
               vite: {
+                resolve: {
+                  alias: {
+                    '@stream-app/shared': path.resolve(__dirname, './src/renderer/src/types/shared.ts'),
+                    '@stream-app/native-audio': path.resolve(__dirname, '../../packages/native-audio/index.js')
+                  }
+                },
                 build: {
                   outDir: path.resolve(__dirname, 'dist/main'),
                   rollupOptions: {

@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { verifySessionToken, type SessionPayload } from '../auth/session';
-import { abandonActivePublication, getRoom } from '../socket/signaling';
+import { abandonActivePublication, getRoom, notifyCameraTrackChanged, restoreActivePublication } from '../socket/signaling';
 import { checkRateLimit } from '../security/rateLimiter';
 import {
   CloudflareRealtimeError,
@@ -105,10 +105,11 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     }
   };
 
-  app.post('/api/realtime/session', async (request, reply) => {
+  app.post<{ Body?: { forceNew?: boolean } }>('/api/realtime/session', async (request, reply) => {
     const auth = await authenticate(request, reply);
     if (!auth) return;
     const previous = ownedSession(auth.session.participantId, auth.session.roomId);
+    const forceNew = request.body?.forceNew === true;
     const registryRoomId = cloudflareSessionRegistry.getSession(auth.session.participantId)?.roomId || null;
     const roomAffinityMatches = !registryRoomId || registryRoomId === auth.session.roomId;
     devLog('ROOM_AFFINITY', {
@@ -119,7 +120,32 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
       matches: roomAffinityMatches,
     });
     if (!roomAffinityMatches) devLog('ROOM_AFFINITY_MISMATCH', { participantId: auth.session.participantId, tellasRoomId: auth.session.roomId, registryRoomId });
-    if (previous) return reply.send({ sessionId: previous.cloudflareSessionId });
+    if (previous && !forceNew) return reply.send({ sessionId: previous.cloudflareSessionId });
+
+    if (previous && forceNew) {
+      const stream = cloudflareSessionRegistry.getStream(auth.session.participantId);
+      const camera = cloudflareSessionRegistry.getCamera(auth.session.participantId);
+      const subscription = cloudflareSessionRegistry.getSubscription(auth.session.participantId);
+      const staleMids = [
+        ...(stream ? [stream.videoMid, ...(stream.audioMid ? [stream.audioMid] : [])] : []),
+        ...(camera ? [camera.mid] : []),
+        ...(subscription?.remoteMids || []),
+      ];
+      if (staleMids.length > 0) {
+        await runSessionOperation(previous.cloudflareSessionId, () => client.closeTracks(previous.cloudflareSessionId, staleMids)).catch((error) => {
+          devLog('STALE_SESSION_CLEANUP_FAILED', {
+            participantId: auth.session.participantId,
+            sessionId: previous.cloudflareSessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      cloudflareSessionRegistry.removeParticipant(auth.session.participantId, 'force-new-session');
+      devLog('STALE_SESSION_REPLACED', {
+        participantId: auth.session.participantId,
+        sessionId: previous.cloudflareSessionId,
+      });
+    }
 
     const startedAt = performance.now();
     try {
@@ -226,7 +252,91 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     }
   });
 
-  app.post<{ Body: { targetParticipantId?: string } }>('/api/realtime/subscribe', async (request, reply) => {
+  app.post('/api/realtime/restore-publication', async (request, reply) => {
+    const auth = await authenticate(request, reply);
+    if (!auth) return;
+    const restored = restoreActivePublication(auth.session.roomId, auth.session.participantId, request.body?.announce !== false);
+    if (!restored) return reply.status(403).send({ error: 'Publicação não pode ser recuperada nesta sala.', code: 'RECOVERY_NOT_AUTHORIZED' });
+    return reply.send({ success: true });
+  });
+
+  app.post('/api/realtime/announce-recovered-publication', async (request, reply) => {
+    const auth = await authenticate(request, reply);
+    if (!auth) return;
+    const announced = restoreActivePublication(auth.session.roomId, auth.session.participantId, true);
+    if (!announced) return reply.status(403).send({ error: 'Publicação não pode ser anunciada nesta sala.', code: 'RECOVERY_NOT_AUTHORIZED' });
+    return reply.send({ success: true });
+  });
+
+  app.post<{ Body: { sessionDescription?: unknown; mid?: string } }>('/api/realtime/publish-camera', {
+    bodyLimit: REALTIME_SDP_BODY_LIMIT,
+  }, async (request, reply) => {
+    const auth = await authenticate(request, reply);
+    if (!auth) return;
+    const mediaSession = ownedSession(auth.session.participantId, auth.session.roomId);
+    if (!mediaSession) return reply.status(409).send({ error: 'Sessão de mídia ausente.', code: 'MEDIA_SESSION_REQUIRED' });
+    if (!auth.session.canPublish) {
+      return reply.status(403).send({ error: 'Publicação da câmera não autorizada.', code: 'PUBLISH_FORBIDDEN' });
+    }
+    const previousCamera = cloudflareSessionRegistry.getCamera(auth.session.participantId);
+    if (previousCamera) {
+      await runSessionOperation(previousCamera.cloudflareSessionId, () => client.closeTracks(previousCamera.cloudflareSessionId, [previousCamera.mid])).catch((error) => {
+        devLog('STALE_CAMERA_CLEANUP_FAILED', {
+          participantId: auth.session.participantId,
+          sessionId: previousCamera.cloudflareSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      cloudflareSessionRegistry.removeCamera(auth.session.participantId);
+      notifyCameraTrackChanged(auth.session.roomId, auth.session.participantId, false);
+    }
+    if (!isSessionDescription(request.body?.sessionDescription) || typeof request.body.mid !== 'string' || !request.body.mid) {
+      return reply.status(400).send({ error: 'Oferta ou MID da câmera inválido.', code: 'INVALID_CAMERA_TRACK' });
+    }
+
+    const trackId = crypto.randomUUID();
+    try {
+      const result = await runSessionOperation(mediaSession.cloudflareSessionId, () => client.addTracks(mediaSession.cloudflareSessionId, {
+        sessionDescription: request.body.sessionDescription as CloudflareSessionDescription,
+        tracks: [{ location: 'local', mid: request.body.mid, trackName: trackId, kind: 'video' }],
+      }));
+      if (!result.sessionDescription) throw new CloudflareRealtimeError('Resposta SDP da câmera ausente.', 502, 'CLOUDFLARE_SDP_MISSING');
+      const failed = result.tracks?.find((track) => track.errorCode);
+      if (failed) throw new CloudflareRealtimeError(failed.errorDescription || 'Falha ao publicar câmera.', 502, failed.errorCode || 'CAMERA_PUBLISH_FAILED');
+      cloudflareSessionRegistry.setCamera({
+        participantId: auth.session.participantId,
+        roomId: auth.session.roomId,
+        cloudflareSessionId: mediaSession.cloudflareSessionId,
+        trackId,
+        mid: request.body.mid,
+      });
+      notifyCameraTrackChanged(auth.session.roomId, auth.session.participantId, true);
+      devLog('CAMERA_TRACK_PUBLISHED', { participantId: auth.session.participantId, roomId: auth.session.roomId, trackId, mid: request.body.mid });
+      return reply.send({ sessionDescription: result.sessionDescription });
+    } catch (error) {
+      request.log.error({ err: error }, 'Cloudflare camera publish failed');
+      return sendCloudflareError(reply, error);
+    }
+  });
+
+  app.post('/api/realtime/unpublish-camera', async (request, reply) => {
+    const auth = await authenticate(request, reply);
+    if (!auth) return;
+    const mediaSession = ownedSession(auth.session.participantId, auth.session.roomId);
+    const camera = cloudflareSessionRegistry.getCamera(auth.session.participantId);
+    if (!mediaSession || !camera) return reply.send({ success: true });
+    try {
+      const result = await runSessionOperation(mediaSession.cloudflareSessionId, () => client.closeTracks(mediaSession.cloudflareSessionId, [camera.mid]));
+      cloudflareSessionRegistry.removeCamera(auth.session.participantId);
+      notifyCameraTrackChanged(auth.session.roomId, auth.session.participantId, false);
+      devLog('CAMERA_TRACK_CLOSED', { participantId: auth.session.participantId, roomId: auth.session.roomId, trackId: camera.trackId, mid: camera.mid });
+      return reply.send({ success: true, sessionDescription: result.sessionDescription });
+    } catch (error) {
+      return sendCloudflareError(reply, error);
+    }
+  });
+
+  app.post<{ Body: { targetParticipantId?: string; cameraOnly?: boolean } }>('/api/realtime/subscribe', async (request, reply) => {
     const auth = await authenticate(request, reply);
     if (!auth) return;
     const targetParticipantId = request.body?.targetParticipantId;
@@ -238,8 +348,12 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     if (!viewerSession) return reply.status(409).send({ error: 'Sessão de mídia ausente.', code: 'MEDIA_SESSION_REQUIRED' });
     const targetMember = auth.room.members.get(targetParticipantId);
     const targetStream = cloudflareSessionRegistry.getStream(targetParticipantId);
+    const targetCamera = cloudflareSessionRegistry.getCamera(targetParticipantId);
+    const cameraOnly = request.body?.cameraOnly === true;
     const targetStreaming = Boolean(targetStream && auth.room.activeStreamers.has(targetParticipantId));
-    const sameRoom = Boolean(targetStream?.roomId === auth.session.roomId);
+    const sameRoom = cameraOnly
+      ? targetCamera?.roomId === auth.session.roomId
+      : targetStream?.roomId === auth.session.roomId;
     devLog('SUBSCRIBE_AUTHORIZATION', {
       callerParticipantId: auth.session.participantId,
       targetParticipantId,
@@ -247,34 +361,40 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
       targetRoomId: targetStream?.roomId || null,
       sameRoom,
       targetStreaming,
-      authorized: Boolean(targetMember && targetStreaming && sameRoom),
+      authorized: Boolean(targetMember && sameRoom && (cameraOnly ? targetCamera : targetStreaming)),
     });
-    if (targetMember && !targetStream && auth.room.activeStreamers.has(targetParticipantId)) {
+    if (!cameraOnly && targetMember && !targetStream && auth.room.activeStreamers.has(targetParticipantId)) {
       return reply.status(409).send({
         error: 'A transmissão alvo está reconectando. Tente novamente em instantes.',
         code: 'TARGET_STREAM_RECOVERING',
       });
     }
-    if (!targetMember || !targetStream || targetStream.roomId !== auth.session.roomId || !auth.room.activeStreamers.has(targetParticipantId)) {
+    if (!targetMember || (cameraOnly && !targetCamera) || (!cameraOnly && (!targetStream || !auth.room.activeStreamers.has(targetParticipantId))) || !sameRoom) {
       devLog('AUTHORIZATION_REJECTED', { reason: targetStream && !sameRoom ? 'CROSS_ROOM' : 'TARGET_NOT_STREAMING', participantId: auth.session.participantId, targetParticipantId });
-      return reply.status(403).send({ error: 'Transmissão alvo indisponível nesta sala.', code: 'TARGET_STREAM_FORBIDDEN' });
+      return cameraOnly
+        ? reply.status(409).send({ error: 'A câmera deste participante não está ativa.', code: 'CAMERA_NOT_PUBLISHED' })
+        : reply.status(403).send({ error: 'Transmissão alvo indisponível nesta sala.', code: 'TARGET_STREAM_FORBIDDEN' });
     }
     if (!cloudflareSessionRegistry.beginSubscription(auth.session.participantId)) {
       return reply.status(409).send({ error: 'Já existe uma subscription ativa ou em andamento.', code: 'SUBSCRIPTION_ALREADY_ACTIVE' });
     }
 
-    const remoteTracks = [
-      { location: 'remote' as const, sessionId: targetStream.cloudflareSessionId, trackName: targetStream.videoTrackId, kind: 'video' as const },
-      ...(targetStream.audioTrackId ? [{ location: 'remote' as const, sessionId: targetStream.cloudflareSessionId, trackName: targetStream.audioTrackId, kind: 'audio' as const }] : []),
-    ];
+    const remoteTrackRequests = cameraOnly
+      ? [{ source: 'camera' as const, location: 'remote' as const, sessionId: targetCamera!.cloudflareSessionId, trackName: targetCamera!.trackId, kind: 'video' as const }]
+      : [
+          { source: 'screen' as const, location: 'remote' as const, sessionId: targetStream!.cloudflareSessionId, trackName: targetStream!.videoTrackId, kind: 'video' as const },
+          ...(targetCamera ? [{ source: 'camera' as const, location: 'remote' as const, sessionId: targetCamera.cloudflareSessionId, trackName: targetCamera.trackId, kind: 'video' as const }] : []),
+          ...(targetStream!.audioTrackId ? [{ source: 'audio' as const, location: 'remote' as const, sessionId: targetStream!.cloudflareSessionId, trackName: targetStream!.audioTrackId, kind: 'audio' as const }] : []),
+        ];
+    const remoteTracks = remoteTrackRequests.map(({ source: _source, ...track }) => track);
     try {
       devLog('SUBSCRIBE_TRACK_RESOLUTION', {
         targetParticipantId,
-        publisherSessionId: targetStream.cloudflareSessionId,
-        videoTrackId: targetStream.videoTrackId,
-        audioTrackId: targetStream.audioTrackId,
+        publisherSessionId: cameraOnly ? targetCamera!.cloudflareSessionId : targetStream!.cloudflareSessionId,
+        videoTrackId: cameraOnly ? targetCamera!.trackId : targetStream!.videoTrackId,
+        audioTrackId: cameraOnly ? null : targetStream!.audioTrackId,
         hasVideo: true,
-        hasAudio: Boolean(targetStream.audioTrackId),
+        hasAudio: !cameraOnly && Boolean(targetStream!.audioTrackId),
       });
       for (const track of remoteTracks) devLog('REMOTE_TRACK_REQUESTED', {
         viewerParticipantId: auth.session.participantId,
@@ -298,13 +418,20 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
         throw new CloudflareRealtimeError(failed.errorDescription || 'Falha ao receber track.', 502, failed.errorCode || 'TRACK_SUBSCRIBE_FAILED');
       }
       const remoteMids = createdMids;
+      const remoteTrackSources: Record<string, 'screen' | 'camera' | 'audio'> = {};
+      remoteMids.forEach((mid, index) => {
+        const requestedTrack = remoteTrackRequests[index];
+        if (requestedTrack) remoteTrackSources[mid] = requestedTrack.source;
+      });
       cloudflareSessionRegistry.setSubscription({
         viewerParticipantId: auth.session.participantId,
         targetParticipantId,
         roomId: auth.session.roomId,
         remoteMids,
+        remoteTrackSources,
+        cameraOnly,
       });
-      return reply.send({ sessionDescription: result.sessionDescription, remoteMids });
+      return reply.send({ sessionDescription: result.sessionDescription, remoteMids, remoteTrackSources });
     } catch (error) {
       request.log.error({ err: error }, 'Cloudflare subscribe failed');
       return sendCloudflareError(reply, error);
@@ -342,15 +469,15 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
       const startedAt = performance.now();
       subscription.remoteMids.forEach((mid, index) => devLog('REMOTE_TRACK_CLOSE_REQUEST', {
         targetParticipantId: subscription.targetParticipantId,
-        trackId: index === 0 ? targetStream?.videoTrackId : targetStream?.audioTrackId,
+        trackId: targetStream?.videoTrackId,
+        source: subscription.remoteTrackSources[mid] || 'unknown',
         mid,
-        kind: index === 0 ? 'video' : 'audio',
       }));
       const result = await runSessionOperation(mediaSession.cloudflareSessionId, () => client.closeTracks(mediaSession.cloudflareSessionId, subscription.remoteMids));
       subscription.remoteMids.forEach((mid, index) => devLog('REMOTE_TRACK_CLOSED', {
         targetParticipantId: subscription.targetParticipantId,
-        kind: index === 0 ? 'video' : 'audio',
-        trackId: index === 0 ? targetStream?.videoTrackId : targetStream?.audioTrackId,
+        source: subscription.remoteTrackSources[mid] || 'unknown',
+        trackId: targetStream?.videoTrackId,
         mid,
         elapsedMs: Math.round(performance.now() - startedAt),
       }));
@@ -386,8 +513,9 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     const mediaSession = ownedSession(auth.session.participantId, auth.session.roomId);
     if (mediaSession) {
       const stream = cloudflareSessionRegistry.getStream(auth.session.participantId);
+      const camera = cloudflareSessionRegistry.getCamera(auth.session.participantId);
       const subscription = cloudflareSessionRegistry.getSubscription(auth.session.participantId);
-      const mids = [...(stream ? [stream.videoMid, ...(stream.audioMid ? [stream.audioMid] : [])] : []), ...(subscription?.remoteMids || [])];
+      const mids = [...(stream ? [stream.videoMid, ...(stream.audioMid ? [stream.audioMid] : [])] : []), ...(camera ? [camera.mid] : []), ...(subscription?.remoteMids || [])];
       try {
         await runSessionOperation(mediaSession.cloudflareSessionId, () => client.closeTracks(mediaSession.cloudflareSessionId, mids));
       } catch (error) {
@@ -404,7 +532,8 @@ export function registerRealtimeRoutes(app: FastifyInstance, client: CloudflareR
     const mediaSession = ownedSession(auth.session.participantId, auth.session.roomId);
     if (mediaSession) {
       const stream = cloudflareSessionRegistry.getStream(auth.session.participantId);
-      const mids = stream ? [stream.videoMid, ...(stream.audioMid ? [stream.audioMid] : [])] : [];
+      const camera = cloudflareSessionRegistry.getCamera(auth.session.participantId);
+      const mids = [...(stream ? [stream.videoMid, ...(stream.audioMid ? [stream.audioMid] : [])] : []), ...(camera ? [camera.mid] : [])];
       try {
         await runSessionOperation(mediaSession.cloudflareSessionId, () => client.closeTracks(mediaSession.cloudflareSessionId, mids));
       } catch (error) {

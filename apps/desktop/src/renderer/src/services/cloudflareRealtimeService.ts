@@ -5,16 +5,17 @@ export interface RemoteStreamInfo {
   participantId: string;
   displayName: string;
   stream: MediaStream;
+  source: 'screen' | 'camera';
 }
 
 export type RealtimeConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed';
 
 export interface CloudflareRealtimeCallbacks {
   onRemoteTrackSubscribed: (info: RemoteStreamInfo) => void;
-  onRemoteTrackUnsubscribed: (participantId: string) => void;
+  onRemoteTrackUnsubscribed: (participantId: string, source?: 'screen' | 'camera') => void;
   onConnectionStateChanged: (state: RealtimeConnectionState) => void;
   onError: (error: Error) => void;
-  onSubscriptionFailed?: (participantId: string, error: Error) => void;
+  onSubscriptionFailed?: (participantId: string, error: Error, cameraOnly?: boolean) => void;
   onParticipantDisconnected?: (participantId: string) => void;
   onPublicationRecoveryFailed?: (error: Error) => void;
 }
@@ -129,7 +130,10 @@ export class CloudflareRealtimeService {
   private connectingPromise: Promise<void> | null = null;
   private subscriptionPromise: Promise<void> | null = null;
   private remoteStreams = new Map<string, MediaStream>();
+  private remoteCameraStreams = new Map<string, MediaStream>();
+  private remoteTrackSources = new Map<string, 'screen' | 'camera' | 'audio'>();
   private currentlySubscribedParticipantId: string | null = null;
+  private currentSubscriptionCameraOnly = false;
   private subscriptionGeneration = 0;
   private subscriptionTimeout: ReturnType<typeof setTimeout> | null = null;
   private remoteMids: string[] = [];
@@ -143,7 +147,18 @@ export class CloudflareRealtimeService {
   private publicationConfirmed = false;
   private recoveryPending = false;
   private currentVideoPreset: VideoQualityPreset = VIDEO_QUALITY_PRESETS['1080p30'];
+  private publishedCameraTrack: MediaStreamTrack | null = null;
+  private cameraTrackOperation: Promise<void> = Promise.resolve();
+  private sessionNeedsReplacement = false;
   private readonly backendUrl = getBackendUrl();
+
+  get subscribedParticipantId(): string | null {
+    return this.currentlySubscribedParticipantId;
+  }
+
+  get cameraOnlySubscription(): boolean {
+    return this.currentSubscriptionCameraOnly;
+  }
 
   setCallbacks(callbacks: CloudflareRealtimeCallbacks): void {
     this.callbacks = callbacks;
@@ -187,8 +202,11 @@ export class CloudflareRealtimeService {
     });
     this.connectingPromise = (async () => {
       this.intentionalClose = false;
-      const result = await this.api<{ sessionId: string; sessionDescription?: SessionDescriptionPayload }>('session');
+      const result = await this.api<{ sessionId: string; sessionDescription?: SessionDescriptionPayload }>('session', {
+        forceNew: this.sessionNeedsReplacement,
+      });
       this.sessionId = result.sessionId;
+      this.sessionNeedsReplacement = false;
       this.createPeerConnection();
       if (result.sessionDescription) await this.peerConnection!.setRemoteDescription(result.sessionDescription);
       if (DEV) console.log('[CLOUDFLARE][SESSION_CREATED]', { participantId: this.participantId, roomId: this.roomId, sessionId: this.sessionId, elapsedMs: Math.round(performance.now() - startedAt) });
@@ -222,13 +240,18 @@ export class CloudflareRealtimeService {
         event.track.stop();
         return;
       }
-      const previousStream = this.remoteStreams.get(target);
+      const requestedSource = this.remoteTrackSources.get(event.transceiver.mid || '');
+      const source = this.currentSubscriptionCameraOnly && event.track.kind === 'video'
+        ? 'camera'
+        : requestedSource === 'camera' ? 'camera' : 'screen';
+      const streamMap = source === 'camera' ? this.remoteCameraStreams : this.remoteStreams;
+      const previousStream = streamMap.get(target);
       const stream = new MediaStream(previousStream?.getTracks() || []);
       if (!stream.getTracks().some((track) => track.id === event.track.id)) stream.addTrack(event.track);
-      this.remoteStreams.set(target, stream);
-      event.track.onended = () => this.removeRemoteTrack(target, event.track.id);
-      if (DEV) console.log('[CLOUDFLARE][REMOTE_TRACK_RECEIVED]', { targetParticipantId: target, kind: event.track.kind, mid: event.transceiver.mid, readyState: event.track.readyState, generation: this.subscriptionGeneration });
-      this.callbacks?.onRemoteTrackSubscribed({ participantId: target, displayName: '', stream });
+      streamMap.set(target, stream);
+      event.track.onended = () => this.removeRemoteTrack(target, event.track.id, source);
+      if (DEV) console.log('[CLOUDFLARE][REMOTE_TRACK_RECEIVED]', { targetParticipantId: target, source, kind: event.track.kind, mid: event.transceiver.mid, readyState: event.track.readyState, generation: this.subscriptionGeneration });
+      this.callbacks?.onRemoteTrackSubscribed({ participantId: target, displayName: '', stream, source });
     };
     this.peerConnection = peerConnection;
   }
@@ -236,9 +259,11 @@ export class CloudflareRealtimeService {
   async publishStream(stream: MediaStream, preset?: VideoQualityPreset): Promise<void> {
     if (!this.recovering) this.publicationConfirmed = false;
     this.publishInFlight = true;
+    const preservedCameraTrack = this.publishedCameraTrack;
     let senders: RTCRtpSender[] = [];
     try {
       const transitioningFromViewer = !this.localStream
+        && !this.publishedCameraTrack
         && Boolean(this.peerConnection?.getTransceivers().length);
       if (transitioningFromViewer) {
         if (DEV) console.log('[CLOUDFLARE][MEDIA_ROLE_TRANSITION]', {
@@ -278,6 +303,13 @@ export class CloudflareRealtimeService {
       await this.peerConnection.setRemoteDescription(result.sessionDescription);
       await waitForPeerConnectionConnected(this.peerConnection);
       this.localStream = stream;
+      if (preservedCameraTrack?.readyState === 'live') {
+        try {
+          await this.setCameraTrack(preservedCameraTrack);
+        } catch (error) {
+          console.error('[CLOUDFLARE][CAMERA_REPUBLISH_AFTER_SCREEN_START_FAILED]', error);
+        }
+      }
     } catch (error) {
       for (const sender of senders) this.peerConnection?.removeTrack(sender);
       this.localStream = null;
@@ -298,6 +330,65 @@ export class CloudflareRealtimeService {
       this.recoveryPending = false;
       void this.recover().catch((error) => this.callbacks?.onError(error instanceof Error ? error : new Error(String(error))));
     }
+  }
+
+  setCameraTrack(track: MediaStreamTrack | null): Promise<void> {
+    const operation = this.cameraTrackOperation.catch(() => undefined).then(() => (
+      track ? this.publishCameraTrack(track) : this.unpublishCameraTrack()
+    ));
+    this.cameraTrackOperation = operation;
+    return operation;
+  }
+
+  private async publishCameraTrack(track: MediaStreamTrack): Promise<void> {
+    if (this.publishedCameraTrack?.id === track.id) return;
+    if (track.readyState !== 'live') return;
+    if (!this.peerConnection) await this.connect();
+    if (!this.peerConnection) throw new Error('Sessão de mídia da câmera indisponível.');
+    const peerConnection = this.peerConnection;
+    const sender = peerConnection.addTrack(track, new MediaStream([track]));
+    try {
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      await waitForIceGathering(peerConnection);
+      const localDescription = peerConnection.localDescription;
+      const mid = peerConnection.getTransceivers().find((item) => item.sender === sender)?.mid;
+      if (!localDescription || !mid) throw new Error('Oferta SDP da câmera inválida.');
+      const result = await this.api<{ sessionDescription: SessionDescriptionPayload }>('publish-camera', {
+        sessionDescription: toPayload(localDescription),
+        mid,
+      });
+      await peerConnection.setRemoteDescription(result.sessionDescription);
+      this.publishedCameraTrack = track;
+    } catch (error) {
+      if (error instanceof RealtimeApiError && error.code === 'CAMERA_ALREADY_PUBLISHED') {
+        const existingCameraSender = peerConnection.getSenders().find((item) => {
+          if (item.track?.kind !== 'video' || !item.track) return false;
+          return !this.localStream?.getTracks().some((localTrack) => localTrack.id === item.track?.id);
+        });
+        peerConnection.removeTrack(sender);
+        if (peerConnection.signalingState === 'have-local-offer') {
+          await peerConnection.setLocalDescription({ type: 'rollback' }).catch(() => undefined);
+        }
+        if (existingCameraSender?.track) this.publishedCameraTrack = existingCameraSender.track;
+        return;
+      }
+      peerConnection.removeTrack(sender);
+      if (peerConnection.signalingState === 'have-local-offer') {
+        await peerConnection.setLocalDescription({ type: 'rollback' }).catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
+  private async unpublishCameraTrack(): Promise<void> {
+    const track = this.publishedCameraTrack;
+    if (!track) return;
+    const result = await this.api<{ sessionDescription?: SessionDescriptionPayload }>('unpublish-camera');
+    if (result.sessionDescription) await this.applyRemoteOffer(result.sessionDescription);
+    const sender = this.peerConnection?.getSenders().find((item) => item.track?.id === track.id);
+    if (sender) this.peerConnection?.removeTrack(sender);
+    this.publishedCameraTrack = null;
   }
 
   async replacePublishedVideoTrack(newTrack: MediaStreamTrack, preset?: VideoQualityPreset): Promise<MediaStreamTrack> {
@@ -322,14 +413,29 @@ export class CloudflareRealtimeService {
     return currentTrack;
   }
 
-  async subscribeToParticipant(participantId: string): Promise<void> {
-    if (this.subscriptionPromise) return this.subscriptionPromise;
-    const operation = this.subscribeOnce(participantId, true);
+  async subscribeToParticipant(participantId: string, cameraOnly = false): Promise<void> {
+    const currentSubscription = this.subscriptionPromise;
+    if (currentSubscription) await currentSubscription.catch(() => undefined);
+    if (this.currentlySubscribedParticipantId === participantId
+      && this.currentSubscriptionCameraOnly === cameraOnly) return;
+    if (this.currentlySubscribedParticipantId) {
+      await this.unsubscribeFromParticipant(this.currentlySubscribedParticipantId, false, 'switch-target');
+    }
+    const operation = this.subscribeOnce(participantId, true, 0, cameraOnly);
     const wrapped = operation.finally(() => {
       if (this.subscriptionPromise === wrapped) this.subscriptionPromise = null;
     });
     this.subscriptionPromise = wrapped;
     return wrapped;
+  }
+
+  async refreshSubscription(participantId: string): Promise<void> {
+    const currentSubscription = this.subscriptionPromise;
+    if (currentSubscription) await currentSubscription.catch(() => undefined);
+    if (this.currentlySubscribedParticipantId !== participantId) return;
+    const cameraOnly = this.currentSubscriptionCameraOnly;
+    await this.unsubscribeFromParticipant(participantId);
+    await this.subscribeToParticipant(participantId, cameraOnly);
   }
 
   private async applyRemoteOffer(sessionDescription?: SessionDescriptionPayload): Promise<void> {
@@ -344,7 +450,7 @@ export class CloudflareRealtimeService {
     await this.api('renegotiate', { sessionDescription: toPayload(this.peerConnection.localDescription) });
   }
 
-  private async subscribeOnce(participantId: string, allowSessionRetry: boolean, recoveryRetry = 0): Promise<void> {
+  private async subscribeOnce(participantId: string, allowSessionRetry: boolean, recoveryRetry = 0, cameraOnly = false): Promise<void> {
     const previous = this.currentlySubscribedParticipantId;
     if (previous && previous !== participantId) {
       if (DEV) console.log('[CLOUDFLARE][SWITCH_TARGET]', { previousParticipantId: previous, nextParticipantId: participantId, generation: this.subscriptionGeneration + 1 });
@@ -355,17 +461,24 @@ export class CloudflareRealtimeService {
     if (!this.peerConnection) throw new Error('PeerConnection Cloudflare indisponível.');
     const generation = ++this.subscriptionGeneration;
     this.currentlySubscribedParticipantId = participantId;
+    this.currentSubscriptionCameraOnly = cameraOnly;
     this.remoteStreams.delete(participantId);
+    this.remoteCameraStreams.delete(participantId);
     this.callbacks?.onRemoteTrackUnsubscribed(participantId);
     if (DEV) console.log('[CLOUDFLARE][SUBSCRIBE_REQUEST]', { callerParticipantId: this.participantId, targetParticipantId: participantId, roomId: this.roomId, sessionId: this.sessionId, generation });
     try {
-      const result = await this.api<{ sessionDescription: SessionDescriptionPayload; remoteMids: string[] }>('subscribe', { targetParticipantId: participantId });
+      const result = await this.api<{
+        sessionDescription: SessionDescriptionPayload;
+        remoteMids: string[];
+        remoteTrackSources?: Record<string, 'screen' | 'camera' | 'audio'>;
+      }>('subscribe', { targetParticipantId: participantId, cameraOnly });
       if (generation !== this.subscriptionGeneration || participantId !== this.currentlySubscribedParticipantId) {
         if (DEV) console.log('[CLOUDFLARE][STALE_OPERATION_IGNORED]', { operation: 'subscribe', participantId, operationGeneration: generation, currentGeneration: this.subscriptionGeneration });
         await this.api('unsubscribe').catch(() => undefined);
         return;
       }
       this.remoteMids = result.remoteMids || [];
+      this.remoteTrackSources = new Map(Object.entries(result.remoteTrackSources || {}));
       await this.applyRemoteOffer(result.sessionDescription);
       this.clearSubscriptionTimeout();
       this.subscriptionTimeout = setTimeout(() => {
@@ -373,7 +486,7 @@ export class CloudflareRealtimeService {
           if (generation !== this.subscriptionGeneration || stats.videoFramesDecoded > 0) return;
           const error = new Error('O vídeo da transmissão não começou a chegar. Tente assistir novamente.');
           void this.unsubscribeFromParticipant(participantId, true, 'timeout')
-            .finally(() => this.callbacks?.onSubscriptionFailed?.(participantId, error));
+            .finally(() => this.callbacks?.onSubscriptionFailed?.(participantId, error, cameraOnly));
         }).catch((error) => this.callbacks?.onError(error instanceof Error ? error : new Error(String(error))));
       }, 5_000);
     } catch (error) {
@@ -385,12 +498,13 @@ export class CloudflareRealtimeService {
         if (DEV) console.log('[CLOUDFLARE][TARGET_RECOVERY_WAIT]', { targetParticipantId: participantId, attempt: recoveryRetry + 1, delayMs });
         await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
         if (generation !== this.subscriptionGeneration || participantId !== this.currentlySubscribedParticipantId) return;
-        return this.subscribeOnce(participantId, allowSessionRetry, recoveryRetry + 1);
+        return this.subscribeOnce(participantId, allowSessionRetry, recoveryRetry + 1, cameraOnly);
       }
       if (generation === this.subscriptionGeneration) {
         await this.api('unsubscribe').catch(() => undefined);
         this.currentlySubscribedParticipantId = null;
-        this.callbacks?.onSubscriptionFailed?.(participantId, error instanceof Error ? error : new Error(String(error)));
+        this.currentSubscriptionCameraOnly = false;
+        this.callbacks?.onSubscriptionFailed?.(participantId, error instanceof Error ? error : new Error(String(error)), cameraOnly);
       }
       if (error instanceof RealtimeApiError && error.status === 410) await this.discardMediaSession('cloudflare-session-disconnected');
       throw error;
@@ -409,12 +523,17 @@ export class CloudflareRealtimeService {
       if (result?.sessionDescription) await this.applyRemoteOffer(result.sessionDescription);
     }
     const stream = this.remoteStreams.get(participantId);
+    const cameraStream = this.remoteCameraStreams.get(participantId);
     const removedVideoTracks = stream?.getVideoTracks().length || 0;
     const removedAudioTracks = stream?.getAudioTracks().length || 0;
     stream?.getTracks().forEach((track) => track.stop());
+    cameraStream?.getTracks().forEach((track) => track.stop());
     this.remoteStreams.delete(participantId);
+    this.remoteCameraStreams.delete(participantId);
+    this.remoteTrackSources.clear();
     this.remoteMids = [];
     if (this.currentlySubscribedParticipantId === participantId) this.currentlySubscribedParticipantId = null;
+    if (this.currentlySubscribedParticipantId === null) this.currentSubscriptionCameraOnly = false;
     this.callbacks?.onRemoteTrackUnsubscribed(participantId);
     if (DEV) console.log('[CLOUDFLARE][REMOTE_MEDIA_CLEARED]', { participantId, removedVideoTracks, removedAudioTracks, reason });
   }
@@ -424,7 +543,10 @@ export class CloudflareRealtimeService {
     if (target) await this.unsubscribeFromParticipant(target);
     else {
       for (const stream of this.remoteStreams.values()) stream.getTracks().forEach((track) => track.stop());
+      for (const stream of this.remoteCameraStreams.values()) stream.getTracks().forEach((track) => track.stop());
       this.remoteStreams.clear();
+      this.remoteCameraStreams.clear();
+      this.remoteTrackSources.clear();
     }
   }
 
@@ -445,6 +567,7 @@ export class CloudflareRealtimeService {
       }
     }
     this.localStream = null;
+    this.publishedCameraTrack = null;
     this.publicationConfirmed = false;
     this.recoveryPending = false;
     if (DEV) console.log('[CLOUDFLARE][STOP_PUBLISH_COMPLETE]', { participantId: this.participantId, stillWatchingParticipantId: this.currentlySubscribedParticipantId });
@@ -455,13 +578,17 @@ export class CloudflareRealtimeService {
     this.subscriptionGeneration++;
     this.clearSubscriptionTimeout();
     this.remoteStreams.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
+    this.remoteCameraStreams.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
     this.remoteStreams.clear();
+    this.remoteCameraStreams.clear();
+    this.remoteTrackSources.clear();
     this.peerConnection?.close();
     this.peerConnection = null;
     this.sessionId = null;
     this.currentlySubscribedParticipantId = null;
     this.remoteMids = [];
     this.localStream = null;
+    this.publishedCameraTrack = null;
     this.publicationConfirmed = false;
     this.recoveryPending = false;
     this.callbacks?.onConnectionStateChanged('closed');
@@ -472,6 +599,7 @@ export class CloudflareRealtimeService {
     if (this.recovering || this.intentionalClose) return;
     this.recovering = true;
     const localStream = this.localStream;
+    const cameraTrack = this.publishedCameraTrack;
     const target = this.currentlySubscribedParticipantId;
     const oldSessionId = this.sessionId;
     const attempt = ++this.reconnectAttempt;
@@ -484,10 +612,19 @@ export class CloudflareRealtimeService {
       this.sessionId = null;
       this.currentlySubscribedParticipantId = null;
       this.remoteStreams.clear();
+      this.remoteCameraStreams.clear();
+      this.remoteTrackSources.clear();
+      this.publishedCameraTrack = null;
       this.intentionalClose = false;
       await this.connect();
       if (DEV) console.log('[CLOUDFLARE][RECONNECT_SESSION_CREATED]', { oldSessionId, newSessionId: this.sessionId });
-      if (localStream) { if (DEV) console.log('[CLOUDFLARE][RECONNECT_REPUBLISH]', { video: localStream.getVideoTracks().length > 0, audio: localStream.getAudioTracks().length > 0 }); await this.publishStream(localStream); }
+      if (localStream) {
+        await this.api('restore-publication', { announce: false });
+        if (DEV) console.log('[CLOUDFLARE][RECONNECT_REPUBLISH]', { video: localStream.getVideoTracks().length > 0, audio: localStream.getAudioTracks().length > 0 });
+        await this.publishStream(localStream);
+      }
+      if (cameraTrack?.readyState === 'live') await this.setCameraTrack(cameraTrack);
+      if (localStream) await this.api('announce-recovered-publication');
       if (target) { if (DEV) console.log('[CLOUDFLARE][RECONNECT_RESUBSCRIBE]', { targetParticipantId: target }); await this.subscribeToParticipant(target); }
       else if (DEV) console.log('[CLOUDFLARE][RECONNECT_IDLE]', { remoteTracksRequested: 0 });
       this.recoveryPending = false;
@@ -499,6 +636,7 @@ export class CloudflareRealtimeService {
         this.peerConnection = null;
         this.sessionId = null;
         this.localStream = null;
+        this.publishedCameraTrack = null;
         this.publicationConfirmed = false;
         this.recoveryPending = false;
         this.callbacks?.onPublicationRecoveryFailed?.(error instanceof Error ? error : new Error(String(error)));
@@ -516,6 +654,7 @@ export class CloudflareRealtimeService {
     this.peerConnection = null;
     this.sessionId = null;
     this.localStream = null;
+    this.publishedCameraTrack = null;
     this.publicationConfirmed = false;
     this.recoveryPending = false;
     this.currentlySubscribedParticipantId = null;
@@ -523,17 +662,25 @@ export class CloudflareRealtimeService {
       remoteStream.getTracks().forEach((track) => track.stop());
       this.callbacks?.onRemoteTrackUnsubscribed(participantId);
     });
+    this.remoteCameraStreams.forEach((remoteStream, participantId) => {
+      remoteStream.getTracks().forEach((track) => track.stop());
+      this.callbacks?.onRemoteTrackUnsubscribed(participantId, 'camera');
+    });
     this.remoteStreams.clear();
+    this.remoteCameraStreams.clear();
+    this.remoteTrackSources.clear();
     this.remoteMids = [];
+    this.sessionNeedsReplacement = true;
   }
 
-  private removeRemoteTrack(participantId: string, trackId: string): void {
-    const stream = this.remoteStreams.get(participantId);
+  private removeRemoteTrack(participantId: string, trackId: string, source: 'screen' | 'camera'): void {
+    const streamMap = source === 'camera' ? this.remoteCameraStreams : this.remoteStreams;
+    const stream = streamMap.get(participantId);
     const track = stream?.getTracks().find((item) => item.id === trackId);
     if (stream && track) stream.removeTrack(track);
     if (!stream || stream.getTracks().length === 0) {
-      this.remoteStreams.delete(participantId);
-      this.callbacks?.onRemoteTrackUnsubscribed(participantId);
+      streamMap.delete(participantId);
+      this.callbacks?.onRemoteTrackUnsubscribed(participantId, source);
     }
   }
 
