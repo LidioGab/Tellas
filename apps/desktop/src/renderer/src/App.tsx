@@ -13,6 +13,7 @@ import {
 } from './audio/webCapturePolicy';
 import { DesktopSource, VIDEO_QUALITY_PRESETS, WindowsAudioEnvironment, AudioCaptureStrategy, type StreamViewerInfo } from '@stream-app/shared';
 import { SourcePickerModal } from './components/SourcePickerModal';
+import { WindowControls } from './components/WindowControls';
 import { StreamPublisher } from './components/StreamPublisher';
 import { StreamViewer } from './components/StreamViewer';
 import { TellasLogo } from './components/TellasLogo';
@@ -1356,9 +1357,9 @@ export const App: React.FC = () => {
     <div className="flex flex-col h-screen bg-[#313338] text-[#F2F3F5] select-none font-sans overflow-hidden">
 
       {/* ── Topbar (Height: 44px, matching reference) ────────────────────── */}
-      <header className="h-11 px-4 bg-[#2B2D31] flex items-center justify-between z-30 shrink-0 border-b border-[#202225]/40 select-none">
+      <header className="h-11 pl-4 pr-0 bg-[#2B2D31] flex items-center justify-between z-30 shrink-0 border-b border-[#202225]/40 select-none" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         {/* Left: Tellas / {RoomId} */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <span className="font-semibold text-sm text-[#F2F3F5] tracking-tight">Tellas</span>
           {isInRoom && (
             <div className="flex items-center gap-1.5 ml-0.5">
@@ -1394,7 +1395,7 @@ export const App: React.FC = () => {
         </div>
 
         {/* Right: Version & Profile with dropdown */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0 h-full no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <AppUpdateControl mediaActive={isStreaming || watchModalOpen} />
 
           <div className="flex items-center gap-1.5 px-2 py-1 rounded-md">
@@ -1406,6 +1407,7 @@ export const App: React.FC = () => {
             </div>
             <span className="text-xs font-medium text-[#F2F3F5] max-w-[120px] truncate">{userName}</span>
           </div>
+          <WindowControls />
         </div>
       </header>
 

@@ -48,6 +48,8 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     show: true,
+    frame: false,
+    titleBarStyle: 'hidden',
     title: 'Tellas — Compartilhamento de Tela',
     backgroundColor: '#090A0F',
     autoHideMenuBar: true,
@@ -63,6 +65,17 @@ function createWindow() {
 
   mainWindow.removeMenu();
   mainWindow.setMenuBarVisibility(false);
+
+  // Send window state updates to renderer
+  const sendWindowState = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:state-changed', {
+        isMaximized: mainWindow.isMaximized()
+      });
+    }
+  };
+  mainWindow.on('maximize', sendWindowState);
+  mainWindow.on('unmaximize', sendWindowState);
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
@@ -217,6 +230,34 @@ ipcMain.handle('open-audio-diagnostic-folder', async () => {
   return {
     success: win10AudioLogger.openLogFolder()
   };
+});
+
+ipcMain.handle('window:minimize', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.minimize();
+  }
+});
+
+ipcMain.handle('window:maximize', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+    return mainWindow.isMaximized();
+  }
+  return false;
+});
+
+ipcMain.handle('window:close', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+  }
+});
+
+ipcMain.handle('window:is-maximized', () => {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow.isMaximized() : false;
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

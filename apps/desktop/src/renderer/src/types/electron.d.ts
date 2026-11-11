@@ -22,6 +22,14 @@ export interface AudioFrame {
   samples: Float32Array;
 }
 
+export interface WindowControlsAPI {
+  minimize: () => Promise<void>;
+  maximize: () => Promise<boolean>;
+  close: () => Promise<void>;
+  isMaximized: () => Promise<boolean>;
+  onStateChanged: (callback: (state: { isMaximized: boolean }) => void) => () => void;
+}
+
 export interface ElectronAPI {
   // Phase 1 — Screen Capture Sources
   getSources: () => Promise<DesktopSource[]>;
@@ -54,6 +62,7 @@ export interface ElectronAPI {
     install: () => Promise<boolean>;
     onStatusChanged: (callback: (status: UpdaterStatus) => void) => () => void;
   };
+  windowControls?: WindowControlsAPI;
 }
 
 declare global {

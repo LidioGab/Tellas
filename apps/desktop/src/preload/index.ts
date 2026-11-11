@@ -108,4 +108,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener('updater:status', handler);
     },
   },
+
+  windowControls: {
+    minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
+    maximize: (): Promise<boolean> => ipcRenderer.invoke('window:maximize'),
+    close: (): Promise<void> => ipcRenderer.invoke('window:close'),
+    isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:is-maximized'),
+    onStateChanged: (callback: (state: { isMaximized: boolean }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: { isMaximized: boolean }) => callback(state);
+      ipcRenderer.on('window:state-changed', handler);
+      return () => ipcRenderer.removeListener('window:state-changed', handler);
+    },
+  },
 });
