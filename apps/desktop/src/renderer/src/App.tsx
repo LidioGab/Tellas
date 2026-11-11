@@ -1424,9 +1424,6 @@ export const App: React.FC = () => {
                   <TellasLogo className="w-14 h-14" glow />
                 </div>
                 <h1 className="text-xl font-bold text-[#F2F3F5] tracking-tight">Tellas</h1>
-                <p className="text-xs text-[#949BA4]">
-                  Compartilhamento de tela em tempo real com áudio isolado.
-                </p>
               </div>
 
               {/* Display Name Input */}

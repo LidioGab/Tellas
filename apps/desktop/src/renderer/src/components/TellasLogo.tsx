@@ -12,78 +12,56 @@ export const TellasLogo: React.FC<TellasLogoProps> = ({
   return (
     <div className={`relative flex items-center justify-center shrink-0 ${className}`}>
       {glow && (
-        <div className="absolute inset-0 bg-[#5B7CFA]/20 blur-md rounded-full pointer-events-none" />
+        <div className="absolute inset-0 bg-white/10 blur-xl rounded-full pointer-events-none" />
       )}
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 1024 1024"
+        viewBox="0 0 512 512"
         role="img"
         aria-label="Tellas Logo"
-        className="w-full h-full object-contain relative z-10 select-none pointer-events-none drop-shadow-sm"
-        style={{ width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%' }}
+        className="w-full h-full object-contain relative z-10 select-none pointer-events-none drop-shadow-md"
       >
+        <defs>
+          <radialGradient id="tellas-halo" cx="50%" cy="50%" r="55%">
+            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.08" />
+            <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
+          </radialGradient>
+          <filter id="tellas-blurBig" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="14" />
+          </filter>
+          <filter id="tellas-blurMid" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="6" />
+          </filter>
+          <g id="tellas-t-mark" strokeLinejoin="round">
+            <path
+              d="M100 122 H368 V184 H265 V358 H203 V184 H100 Z"
+              fill="none"
+              stroke="#FFFFFF"
+              strokeWidth="7"
+              opacity="0.5"
+            />
+            <path
+              d="M122 144 H390 V206 H287 V380 H225 V206 H122 Z"
+              fill="#FFFFFF"
+              stroke="#FFFFFF"
+              strokeWidth="24"
+            />
+          </g>
+        </defs>
 
-        {/* Outer ring */}
-        <circle cx="512" cy="512" r="458" fill="#ffffff" stroke="#000000" strokeWidth="18" />
-        {/* Inner black disc, leaving a white ring */}
-        <circle cx="512" cy="512" r="420" fill="#000000" />
+        {/* Rounded dark background disc */}
+        <rect width="512" height="512" rx="112" fill="#0A0A0A" />
+        <rect width="512" height="512" rx="112" fill="url(#tellas-halo)" />
 
-        {/* Motion / streaming lines */}
-        <g fill="#ffffff">
-          <rect x="205" y="392" width="185" height="22" rx="11" />
-          <rect x="235" y="438" width="145" height="22" rx="11" />
-          <rect x="285" y="484" width="105" height="22" rx="11" />
+        {/* Dynamic skewed lettermark */}
+        <g transform="translate(55 5) skewX(-10)">
+          <use href="#tellas-t-mark" filter="url(#tellas-blurBig)" opacity="0.3" />
+          <use href="#tellas-t-mark" filter="url(#tellas-blurMid)" opacity="0.25" />
+          <use href="#tellas-t-mark" />
         </g>
-
-        {/* Stylized T / media mark */}
-        <path
-          fill="#ffffff"
-          d="
-            M 320 330
-            Q 304 330 294 343
-            L 250 402
-            Q 238 418 257 418
-            L 520 418
-            Q 538 418 525 431
-            L 430 520
-            L 430 700
-            L 545 612
-            L 545 505
-            L 665 505
-            Q 677 505 685 496
-            L 762 404
-            Q 772 392 761 380
-            L 715 337
-            Q 708 330 695 330
-            Z
-          "
-        />
-
-        {/* Lower stem segment with diagonal visual break */}
-        <path
-          fill="#ffffff"
-          d="
-            M 430 716
-            L 545 628
-            L 545 780
-            Q 545 795 532 804
-            L 482 839
-            Q 470 847 457 839
-            L 430 820
-            Z
-          "
-        />
-
-        {/* Play symbol cutout */}
-        <path
-          fill="#000000"
-          d="M 640 390 L 715 438 Q 726 445 715 452 L 640 500 Q 625 510 625 491 L 625 399 Q 625 380 640 390 Z"
-        />
       </svg>
     </div>
   );
 };
 
 export default TellasLogo;
-
-
