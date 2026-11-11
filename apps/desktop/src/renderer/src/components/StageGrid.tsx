@@ -531,8 +531,8 @@ export const StageGrid: React.FC<StageGridProps> = ({
                         onChangeQuality(preset);
                         setQualityMenuOpen(false);
                       }}
-                      className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                        qualityPreset === preset ? 'bg-[#FFFFFF] text-white' : 'text-[#DBDEE1] hover:bg-[#1F1F1F]'
+                      className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                        qualityPreset === preset ? 'bg-[#FFFFFF] text-[#0A0A0A]' : 'text-[#D4D4D4] hover:bg-[#1F1F1F] hover:text-[#FAFAFA]'
                       }`}
                     >
                       {preset}
