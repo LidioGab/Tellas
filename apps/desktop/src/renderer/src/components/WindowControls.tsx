@@ -28,7 +28,7 @@ export const WindowControls: React.FC = () => {
         onClick={() => void controls.minimize()}
         title="Minimizar"
         aria-label="Minimizar"
-        className="h-11 w-11 flex items-center justify-center text-[#949BA4] hover:text-[#F2F3F5] hover:bg-[#35373C] transition-colors"
+        className="h-11 w-11 flex items-center justify-center text-[#8A8A8A] hover:text-[#FAFAFA] hover:bg-[#1F1F1F] transition-colors"
       >
         <Minus className="w-3.5 h-3.5" />
       </button>
@@ -38,7 +38,7 @@ export const WindowControls: React.FC = () => {
         onClick={() => void controls.maximize()}
         title={isMaximized ? 'Restaurar' : 'Maximizar'}
         aria-label={isMaximized ? 'Restaurar' : 'Maximizar'}
-        className="h-11 w-11 flex items-center justify-center text-[#949BA4] hover:text-[#F2F3F5] hover:bg-[#35373C] transition-colors"
+        className="h-11 w-11 flex items-center justify-center text-[#8A8A8A] hover:text-[#FAFAFA] hover:bg-[#1F1F1F] transition-colors"
       >
         {isMaximized ? (
           <Copy className="w-3 h-3 rotate-180" />
@@ -52,11 +52,10 @@ export const WindowControls: React.FC = () => {
         onClick={() => void controls.close()}
         title="Fechar"
         aria-label="Fechar"
-        className="h-11 w-11 flex items-center justify-center text-[#949BA4] hover:text-white hover:bg-[#ED4245] transition-colors rounded-tr-lg"
+        className="h-11 w-11 flex items-center justify-center text-[#8A8A8A] hover:text-white hover:bg-[#EF4444] transition-colors rounded-tr-lg"
       >
         <X className="w-4 h-4" />
       </button>
     </div>
   );
 };
-

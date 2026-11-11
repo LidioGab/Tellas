@@ -62,35 +62,18 @@ interface StageGridProps {
 }
 
 // Visual themes for participant tiles matching the reference design
-const PARTICIPANT_THEMES: Record<string, { bg: string; type: string; accentColor: string }> = {
-  breniru: { bg: '#E05263', type: 'anime', accentColor: '#FFAAA6' },
-  braquiorradial: { bg: '#384259', type: 'sculpture', accentColor: '#C5A880' },
-  lua: { bg: '#5B6BF0', type: 'moon', accentColor: '#D3DCFF' },
-  dundum: { bg: '#2A9D8F', type: 'avatar', accentColor: '#E9C46A' },
-  discord: { bg: '#C05621', type: 'discord', accentColor: '#F4A261' },
-};
-
-const DEFAULT_THEME_COLORS = [
-  '#E05263',
-  '#384259',
-  '#5B6BF0',
-  '#2A9D8F',
-  '#C05621',
-  '#70587C',
-  '#3B82F6',
-  '#059669',
+const TILE_GRAYSCALE = [
+  '#1C1C1C',
+  '#242424',
+  '#2C2C2C',
+  '#343434',
+  '#3C3C3C',
+  '#444444',
 ];
 
 function getThemeForParticipant(name: string, index: number) {
-  const lower = (name || '').toLowerCase().trim();
-  if (lower.includes('breniru')) return PARTICIPANT_THEMES.breniru;
-  if (lower.includes('braquiorradial')) return PARTICIPANT_THEMES.braquiorradial;
-  if (lower.includes('lua')) return PARTICIPANT_THEMES.lua;
-  if (lower.includes('dundum')) {
-    return index % 2 === 0 ? PARTICIPANT_THEMES.dundum : PARTICIPANT_THEMES.discord;
-  }
-  const color = DEFAULT_THEME_COLORS[Math.abs(index) % DEFAULT_THEME_COLORS.length];
-  return { bg: color, type: 'initial', accentColor: '#FFFFFF' };
+  const color = TILE_GRAYSCALE[Math.abs(index) % TILE_GRAYSCALE.length];
+  return { bg: color, type: 'initial', accentColor: '#FAFAFA' };
 }
 
 // Custom SVG Avatars matching reference style
@@ -218,7 +201,7 @@ const VideoTile: React.FC<{
   }, [stream]);
 
   return (
-    <div className={`relative w-full rounded-2xl overflow-hidden bg-[#1E1F22] border border-[#383A40]/40 shadow-xl group flex flex-col justify-between ${fill ? 'h-full min-h-[300px]' : 'aspect-video'}`}>
+    <div className={`relative w-full rounded-2xl overflow-hidden bg-[#171717] border border-[#262626]/40 shadow-xl group flex flex-col justify-between ${fill ? 'h-full min-h-[300px]' : 'aspect-video'}`}>
       {/* Video element */}
       {stream ? (
         <video
@@ -244,7 +227,7 @@ const VideoTile: React.FC<{
             {title}
           </span>
           {isLive && (
-            <span className="shrink-0 px-1.5 py-0.5 rounded bg-[#ED4245] text-white text-[10px] font-bold tracking-wider uppercase shadow">
+            <span className="shrink-0 px-1.5 py-0.5 rounded bg-[#EF4444] text-white text-[10px] font-bold tracking-wider uppercase shadow">
               AO VIVO
             </span>
           )}
@@ -277,7 +260,7 @@ const VideoTile: React.FC<{
                     e.stopPropagation();
                     onWatch();
                   }}
-                  className="flex items-center gap-1 px-3 py-1 rounded-md bg-[#5865F2] hover:bg-[#4752C4] text-white text-xs font-semibold shadow-sm transition active:scale-95"
+                  className="flex items-center gap-1 px-3 py-1 rounded-md bg-[#FFFFFF] hover:bg-[#4752C4] text-white text-xs font-semibold shadow-sm transition active:scale-95"
                 >
                   <Play className="w-3 h-3 fill-white" />
                   Assistir
@@ -389,7 +372,7 @@ export const StageGrid: React.FC<StageGridProps> = ({
     : allStreamersList[0];
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#313338] relative overflow-hidden select-none">
+    <div className="flex-1 flex flex-col h-full bg-[#0A0A0A] relative overflow-hidden select-none">
       {/* ── Main Stage Area: Grid or Focus Mode ──────────────────────── */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-5 pb-24">
         {viewMode === 'focus' && focusedStream ? (
@@ -498,7 +481,7 @@ export const StageGrid: React.FC<StageGridProps> = ({
       {/* ── Floating Bottom Control Bar ───────────────────────────────── */}
       <div className="fixed bottom-4 left-1/2 -translate-x-1/2 flex items-center justify-center pointer-events-none z-30 max-w-[calc(100vw-2rem)]">
         <div
-          className={`pointer-events-auto flex w-fit max-w-full items-center gap-2 sm:gap-3 bg-[#1E1F22]/95 backdrop-blur-md border border-[#383A40]/80 shadow-2xl rounded-2xl px-3 sm:px-4 py-2 transition-transform duration-500 ease-in-out ${controlsVisible ? '' : 'pointer-events-none'}`}
+          className={`pointer-events-auto flex w-fit max-w-full items-center gap-2 sm:gap-3 bg-[#111111]/95 backdrop-blur-md border border-[#262626] shadow-2xl rounded-2xl px-3 sm:px-4 py-2 transition-transform duration-500 ease-in-out ${controlsVisible ? '' : 'pointer-events-none'}`}
           style={{ transform: controlsVisible ? 'translateY(0)' : 'translateY(calc(100% + 1rem))' }}
         >
             {/* Camera Button */}
@@ -508,11 +491,11 @@ export const StageGrid: React.FC<StageGridProps> = ({
               title={isCameraLoading ? 'Iniciando câmera...' : isCameraActive ? 'Desligar câmera' : 'Ligar câmera'}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition disabled:cursor-wait disabled:opacity-60 ${
                 isCameraActive
-                  ? 'bg-[#35373C] text-white hover:bg-[#3F4147]'
-                  : 'text-[#DBDEE1] hover:bg-[#35373C] hover:text-white'
+                  ? 'bg-[#1F1F1F] text-white hover:bg-[#2A2A2A]'
+                  : 'text-[#DBDEE1] hover:bg-[#1F1F1F] hover:text-white'
               }`}
             >
-              {isCameraLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : isCameraActive ? <VideoOff className="w-4 h-4 text-[#ED4245]" /> : <Video className="w-4 h-4" />}
+              {isCameraLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : isCameraActive ? <VideoOff className="w-4 h-4 text-[#EF4444]" /> : <Video className="w-4 h-4" />}
               <span className="hidden sm:inline">{isCameraLoading ? 'Iniciando...' : isCameraActive ? 'Desligar Câmera' : 'Ligar Câmera'}</span>
             </button>
 
@@ -521,8 +504,8 @@ export const StageGrid: React.FC<StageGridProps> = ({
               onClick={onToggleScreenShare}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition ${
                 isStreaming
-                  ? 'bg-[#ED4245]/20 text-[#ED4245] border border-[#ED4245]/30'
-                  : 'text-[#DBDEE1] hover:bg-[#35373C] hover:text-white'
+                  ? 'bg-[#EF4444]/20 text-[#EF4444] border border-[#ED4245]/30'
+                  : 'text-[#DBDEE1] hover:bg-[#1F1F1F] hover:text-white'
               }`}
             >
               <MonitorUp className="w-4 h-4" />
@@ -533,14 +516,14 @@ export const StageGrid: React.FC<StageGridProps> = ({
             <div className="relative">
               <button
                 onClick={() => setQualityMenuOpen(!qualityMenuOpen)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-[#DBDEE1] hover:bg-[#35373C] hover:text-white transition"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-[#DBDEE1] hover:bg-[#1F1F1F] hover:text-white transition"
               >
                 <Settings className="w-4 h-4" />
                 <span className="hidden sm:inline">Mudar Qualidade</span>
               </button>
 
               {qualityMenuOpen && (
-                <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-40 bg-[#1E1F22] border border-[#383A40] rounded-xl shadow-2xl p-1.5 space-y-1">
+                <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-40 bg-[#171717] border border-[#262626] rounded-xl shadow-2xl p-1.5 space-y-1">
                   {['720p30', '720p60', '1080p30', '1080p60'].map((preset) => (
                     <button
                       key={preset}
@@ -549,7 +532,7 @@ export const StageGrid: React.FC<StageGridProps> = ({
                         setQualityMenuOpen(false);
                       }}
                       className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                        qualityPreset === preset ? 'bg-[#5865F2] text-white' : 'text-[#DBDEE1] hover:bg-[#35373C]'
+                        qualityPreset === preset ? 'bg-[#FFFFFF] text-white' : 'text-[#DBDEE1] hover:bg-[#1F1F1F]'
                       }`}
                     >
                       {preset}
@@ -562,7 +545,7 @@ export const StageGrid: React.FC<StageGridProps> = ({
             {/* Leave Room Button */}
             <button
               onClick={onLeaveRoom}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#ED4245] hover:bg-[#DA373C] text-white text-xs font-semibold shadow-md transition active:scale-95"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#EF4444] hover:bg-[#DC2626] text-white text-xs font-semibold shadow-md transition active:scale-95"
             >
               <span>Sair da Sala</span>
             </button>

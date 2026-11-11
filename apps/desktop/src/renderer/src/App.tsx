@@ -1354,23 +1354,23 @@ export const App: React.FC = () => {
   }, [isStreaming, userName, activeStreamers]);
 
   return (
-    <div className="flex flex-col h-screen bg-[#313338] text-[#F2F3F5] select-none font-sans overflow-hidden">
+    <div className="flex flex-col h-screen bg-[#0A0A0A] text-[#FAFAFA] select-none font-sans overflow-hidden">
 
       {/* ── Topbar (Height: 44px, matching reference) ────────────────────── */}
-      <header className="h-11 pl-4 pr-0 bg-[#2B2D31] flex items-center justify-between z-30 shrink-0 border-b border-[#202225]/40 select-none" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+      <header className="h-11 pl-4 pr-0 bg-[#111111] flex items-center justify-between z-30 shrink-0 border-b border-[#1A1A1A] select-none" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         {/* Left: Tellas / {RoomId} */}
         <div className="flex items-center gap-2 no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <span className="font-semibold text-sm text-[#F2F3F5] tracking-tight">Tellas</span>
+          <span className="font-semibold text-sm text-[#FAFAFA] tracking-tight">Tellas</span>
           {isInRoom && (
             <div className="flex items-center gap-1.5 ml-0.5">
-              <span className="text-[#80848E] text-xs">/</span>
+              <span className="text-[#8A8A8A] text-xs">/</span>
               <button
                 onClick={copyRoomCode}
-                className="flex items-center gap-1 text-xs text-[#DBDEE1] hover:text-white transition font-mono tracking-wider"
+                className="flex items-center gap-1 text-xs text-[#D4D4D4] hover:text-white transition font-mono tracking-wider"
                 title="Clique para copiar o código da sala"
               >
                 {roomId}
-                {copied ? <Check className="w-3 h-3 text-[#23A55A]" /> : <Copy className="w-3 h-3 text-[#80848E]" />}
+                {copied ? <Check className="w-3 h-3 text-[#23A55A]" /> : <Copy className="w-3 h-3 text-[#8A8A8A]" />}
               </button>
               {isHost ? (
                 <button
@@ -1378,7 +1378,7 @@ export const App: React.FC = () => {
                   title={isRoomLocked ? 'Sala trancada' : 'Sala aberta'}
                   className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${
                     isRoomLocked
-                      ? 'bg-[#ED4245]/15 text-[#ED4245] border border-[#ED4245]/30'
+                      ? 'bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30'
                       : 'bg-[#23A55A]/15 text-[#23A55A] border border-[#23A55A]/30'
                   }`}
                 >
@@ -1386,7 +1386,7 @@ export const App: React.FC = () => {
                   {isRoomLocked ? 'Trancada' : 'Aberta'}
                 </button>
               ) : isRoomLocked ? (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#ED4245]/15 text-[#ED4245] border border-[#ED4245]/30">
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30">
                   <Lock className="w-2.5 h-2.5" /> Trancada
                 </span>
               ) : null}
@@ -1400,46 +1400,46 @@ export const App: React.FC = () => {
 
           <div className="flex items-center gap-1.5 px-2 py-1 rounded-md">
             <div className="relative shrink-0">
-              <div className="w-6 h-6 rounded-full bg-[#5865F2] flex items-center justify-center text-[11px] font-bold text-white uppercase shadow-sm">
+              <div className="w-6 h-6 rounded-full bg-[#1C1C1C] flex items-center justify-center text-[11px] font-bold text-[#FAFAFA] border border-[#262626] uppercase shadow-sm">
                 {isCameraLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : userName ? userName.charAt(0) : 'G'}
               </div>
-              <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#23A55A] ring-2 ring-[#2B2D31]" />
+              <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#23A55A] ring-2 ring-[#111111]" />
             </div>
-            <span className="text-xs font-medium text-[#F2F3F5] max-w-[120px] truncate">{userName}</span>
+            <span className="text-xs font-medium text-[#FAFAFA] max-w-[120px] truncate">{userName}</span>
           </div>
           <WindowControls />
         </div>
       </header>
 
       {/* ── Main Workspace ───────────────────────────────────────────── */}
-      <main className="flex-1 overflow-hidden relative bg-[#313338]">
+      <main className="flex-1 overflow-hidden relative bg-[#0A0A0A]">
         {!isInRoom ? (
           /* ── Landing / Login Screen ─────────────────────────────────── */
           <div className="h-full flex items-center justify-center p-4">
-            <div className="w-full max-w-sm bg-[#2B2D31] p-7 rounded-2xl border border-[#383A40] shadow-2xl space-y-5">
+            <div className="w-full max-w-sm bg-[#111111] p-7 rounded-2xl border border-[#262626] shadow-2xl space-y-5">
 
               {/* Header Icon & Title */}
               <div className="text-center space-y-2">
                 <div className="flex justify-center mb-1">
                   <TellasLogo className="w-14 h-14" glow />
                 </div>
-                <h1 className="text-xl font-bold text-[#F2F3F5] tracking-tight">Tellas</h1>
+                <h1 className="text-xl font-bold text-[#FAFAFA] tracking-tight">Tellas</h1>
               </div>
 
               {/* Display Name Input */}
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-[#949BA4]">
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-[#8A8A8A]">
                   Seu nome de exibição
                 </label>
                 <div className="relative flex items-center">
-                  <User className="absolute left-3 w-3.5 h-3.5 text-[#80848E]" />
+                  <User className="absolute left-3 w-3.5 h-3.5 text-[#8A8A8A]" />
                   <input
                     type="text"
                     placeholder="Ex: Gabriel"
                     value={userName}
                     onChange={(e) => handleNameChange(e.target.value)}
                     maxLength={25}
-                    className="w-full pl-8 pr-3 py-2.5 rounded-lg bg-[#1E1F22] text-[#F2F3F5] text-xs placeholder:text-[#6D6F78] focus:outline-none focus:border-[#5865F2] border border-[#383A40] transition"
+                    className="w-full pl-8 pr-3 py-2.5 rounded-lg bg-[#171717] text-[#FAFAFA] text-xs placeholder:text-[#5C5C5C] focus:outline-none focus:border-[#FFFFFF] border border-[#262626] transition"
                   />
                 </div>
               </div>
@@ -1447,7 +1447,7 @@ export const App: React.FC = () => {
               {/* Create Room Button */}
               <button
                 onClick={handleCreateRoom}
-                className="w-full py-2.5 px-4 rounded-lg bg-[#5865F2] hover:bg-[#4752C4] active:bg-[#3C45A5] font-semibold text-white text-xs shadow-md flex items-center justify-center gap-1.5 transition transform active:scale-95"
+                className="w-full py-2.5 px-4 rounded-lg bg-[#FFFFFF] hover:bg-[#E5E5E5] active:bg-[#CCCCCC] font-semibold text-[#0A0A0A] text-xs shadow-md flex items-center justify-center gap-1.5 transition transform active:scale-95"
               >
                 <PlusCircle className="w-3.5 h-3.5" />
                 Criar Nova Sala
@@ -1455,27 +1455,27 @@ export const App: React.FC = () => {
 
               {/* Subtle Divider */}
               <div className="relative flex items-center justify-center my-2">
-                <div className="border-t border-[#383A40] w-full"></div>
-                <span className="bg-[#2B2D31] px-2.5 text-[10px] text-[#949BA4] uppercase tracking-wider font-semibold absolute">
+                <div className="border-t border-[#262626] w-full"></div>
+                <span className="bg-[#111111] px-2.5 text-[10px] text-[#8A8A8A] uppercase tracking-wider font-semibold absolute">
                   ou entrar com código
                 </span>
               </div>
 
               {/* Join Room Form */}
               <form onSubmit={handleJoinRoom} className="space-y-2.5">
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#687180]">
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#8A8A8A]">
                   Código da sala
                 </label>
                 <div className="flex gap-2">
                   <div className="relative min-w-0 flex-1">
-                    <span className="absolute inset-y-0 left-3 flex items-center font-mono text-sm text-[#687180]">#</span>
+                    <span className="absolute inset-y-0 left-3 flex items-center font-mono text-sm text-[#8A8A8A]">#</span>
                     <input
                       type="text"
                       placeholder="Digite o código da sala"
                       value={inputRoomId}
                       onChange={(e) => setInputRoomId(e.target.value.toUpperCase())}
                       maxLength={8}
-                      className="w-full rounded-lg border border-[#252A34] bg-[#101217] py-2 pl-8 pr-3 font-mono text-xs uppercase tracking-widest text-[#F4F6F8] placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[#505764] transition focus:border-[#5B7CFA] focus:outline-none"
+                      className="w-full rounded-lg border border-[#262626] bg-[#111111] py-2 pl-8 pr-3 font-mono text-xs uppercase tracking-widest text-[#FAFAFA] placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[#5C5C5C] transition focus:border-[#FFFFFF] focus:outline-none"
                     />
                   </div>
                   {window.electronAPI && (
@@ -1483,7 +1483,7 @@ export const App: React.FC = () => {
                       type="button"
                       onClick={handlePasteAndJoin}
                       disabled={isJoiningRoom}
-                      className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[#33477E] bg-[#111725] px-3 text-xs font-medium text-[#7D97FF] transition hover:border-[#5B7CFA] hover:bg-[#151D30] disabled:cursor-wait disabled:opacity-50"
+                      className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[#262626] bg-[#171717] px-3 text-xs font-medium text-[#FAFAFA] transition hover:border-[#FFFFFF] hover:bg-[#1F1F1F] disabled:cursor-wait disabled:opacity-50"
                     >
                       <ClipboardPaste className="h-3.5 w-3.5" />
                       Colar
@@ -1493,9 +1493,9 @@ export const App: React.FC = () => {
                 <button
                   type="submit"
                   disabled={!inputRoomId.trim() || isJoiningRoom}
-                  className="w-full py-2.5 px-4 rounded-lg bg-[#16191F] hover:bg-[#1D2129] border border-[#323846] hover:border-[#4A5364] disabled:opacity-40 disabled:cursor-not-allowed font-medium text-[#F4F6F8] text-xs flex items-center justify-center gap-1.5 transition shadow-subtle"
+                  className="w-full py-2.5 px-4 rounded-lg bg-[#171717] hover:bg-[#1F1F1F] border border-[#262626] hover:border-[#3A3A3A] disabled:opacity-40 disabled:cursor-not-allowed font-medium text-[#FAFAFA] text-xs flex items-center justify-center gap-1.5 transition shadow-subtle"
                 >
-                  <LogIn className="w-3.5 h-3.5 text-[#9DA5B4]" />
+                  <LogIn className="w-3.5 h-3.5 text-[#8A8A8A]" />
                   {isJoiningRoom ? 'Entrando...' : 'Entrar na Sala'}
                 </button>
               </form>
@@ -1505,17 +1505,17 @@ export const App: React.FC = () => {
                   type="button"
                   onClick={handleJoinLastRoom}
                   disabled={isJoiningRoom}
-                  className="group w-full rounded-lg border border-[#405A9D] bg-[#11151C] px-3.5 py-3 text-left transition hover:border-[#5B7CFA] hover:bg-[#151A23] disabled:cursor-wait disabled:opacity-60"
+                  className="group w-full rounded-lg border border-[#262626] bg-[#171717] px-3.5 py-3 text-left transition hover:border-[#FFFFFF] hover:bg-[#1F1F1F] disabled:cursor-wait disabled:opacity-60"
                 >
                   <span className="flex items-center gap-3">
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#5B7CFA]/10 text-[#7D97FF]">
                       <History className="h-4 w-4" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[10px] font-semibold uppercase tracking-wider text-[#687180]">
+                      <span className="block text-[10px] font-semibold uppercase tracking-wider text-[#8A8A8A]">
                         Última sala
                       </span>
-                      <span className="mt-0.5 block font-mono text-sm font-semibold tracking-widest text-[#F4F6F8]">
+                      <span className="mt-0.5 block font-mono text-sm font-semibold tracking-widest text-[#FAFAFA]">
                         {lastRoomId}
                       </span>
                     </span>
@@ -1557,7 +1557,7 @@ export const App: React.FC = () => {
                             e.stopPropagation();
                             setSelectedStreamParticipantId(pid);
                           }}
-                          className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium transition ${isSelected ? 'bg-[#5B7CFA] text-white' : 'text-[#9DA5B4] hover:text-white'
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium transition ${isSelected ? 'bg-[#5B7CFA] text-white' : 'text-[#8A8A8A] hover:text-white'
                             }`}
                         >
                           <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-[#F87171]'}`} />
@@ -1570,11 +1570,11 @@ export const App: React.FC = () => {
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center p-6 text-center">
-                <div className="w-12 h-12 rounded-xl bg-[#16191F] border border-[#252A34] flex items-center justify-center mb-3 shadow-subtle">
-                  <Tv className="w-6 h-6 text-[#687180]" />
+                <div className="w-12 h-12 rounded-xl bg-[#171717] border border-[#262626] flex items-center justify-center mb-3 shadow-subtle">
+                  <Tv className="w-6 h-6 text-[#8A8A8A]" />
                 </div>
                 <p className="text-sm font-semibold text-[#EDEFF3]">Aguardando transmissão</p>
-                <p className="text-xs text-[#687180] mt-1 max-w-[280px]">
+                <p className="text-xs text-[#8A8A8A] mt-1 max-w-[280px]">
                   {hasAnyActiveStreamer ? 'Escolha uma transmissão para assistir.' : 'Aguardando alguém iniciar uma transmissão.'}
                 </p>
                 {hasAnyActiveStreamer && (
@@ -1588,7 +1588,7 @@ export const App: React.FC = () => {
                 )}
                 <button
                   onClick={handleLeaveRoom}
-                  className="mt-4 px-3.5 py-1.5 rounded-md bg-[#F87171]/15 hover:bg-[#F87171]/25 text-[#F87171] text-xs font-medium flex items-center gap-1.5 transition"
+                  className="mt-4 px-3.5 py-1.5 rounded-md bg-[#F87171]/15 hover:bg-[#F87171]/25 text-[#EF4444] text-xs font-medium flex items-center gap-1.5 transition"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   Sair da Sala
@@ -1598,9 +1598,9 @@ export const App: React.FC = () => {
           </div>
         ) : layoutMode === 'MOBILE_PORTRAIT' ? (
           /* ── 2. Mobile Portrait Layout (Viewer-First Stack) ── */
-          <div className="h-full flex flex-col overflow-hidden bg-[#0B0D10]">
+          <div className="h-full flex flex-col overflow-hidden bg-[#050505]">
             {/* 16:9 Dedicated Video Area */}
-            <div className="w-full aspect-video bg-[#080A0D] border-b border-[#1D2129] relative shrink-0 overflow-hidden flex items-center justify-center">
+            <div className="w-full aspect-video bg-[#050505] border-b border-[#1D2129] relative shrink-0 overflow-hidden flex items-center justify-center">
               {hasAnyRemoteStream && activeStreamEntry ? (
                 <StreamViewer
                   key={activeStreamEntry[0]}
@@ -1615,11 +1615,11 @@ export const App: React.FC = () => {
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center p-4 text-center">
-                  <div className="w-10 h-10 rounded-xl bg-[#16191F] border border-[#252A34] flex items-center justify-center mb-2 shadow-subtle">
-                    <Tv className="w-5 h-5 text-[#687180]" />
+                  <div className="w-10 h-10 rounded-xl bg-[#171717] border border-[#262626] flex items-center justify-center mb-2 shadow-subtle">
+                    <Tv className="w-5 h-5 text-[#8A8A8A]" />
                   </div>
                   <p className="text-xs font-semibold text-[#EDEFF3]">Aguardando transmissão</p>
-                  <p className="text-[11px] text-[#687180] mt-0.5 max-w-[240px]">
+                  <p className="text-[11px] text-[#8A8A8A] mt-0.5 max-w-[240px]">
                     {hasAnyActiveStreamer ? 'Toque em um participante ao vivo abaixo para assistir.' : 'Aguardando alguém iniciar uma transmissão.'}
                   </p>
                 </div>
@@ -1628,8 +1628,8 @@ export const App: React.FC = () => {
 
             {/* Multi-Streamer Switcher Bar (when 2 or more people are streaming) */}
             {remoteStreams.size > 1 && (
-              <div className="px-3 py-2 bg-[#101217] border-b border-[#1D2129] flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-[#687180] shrink-0">Ao vivo:</span>
+              <div className="px-3 py-2 bg-[#111111] border-b border-[#1D2129] flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#8A8A8A] shrink-0">Ao vivo:</span>
                 {Array.from(remoteStreams.entries()).map(([pid, item]) => {
                   const isSelected = activeStreamEntry?.[0] === pid;
                   return (
@@ -1638,7 +1638,7 @@ export const App: React.FC = () => {
                       onClick={() => setSelectedStreamParticipantId(pid)}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium shrink-0 transition ${isSelected
                           ? 'bg-[#5B7CFA] text-white shadow-cta'
-                          : 'bg-[#16191F] border border-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8]'
+                          : 'bg-[#171717] border border-[#262626] text-[#8A8A8A] hover:text-[#FAFAFA]'
                         }`}
                     >
                       <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-[#F87171]'}`} />
@@ -1653,23 +1653,23 @@ export const App: React.FC = () => {
             <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
               {/* Participants Section */}
               <div className="space-y-1.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#687180] px-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#8A8A8A] px-1">
                   Participantes — {Math.max(1, members.length)}
                 </p>
-                <div className="rounded-lg bg-[#16191F] border border-[#252A34] divide-y divide-[#1D2129] overflow-hidden">
+                <div className="rounded-lg bg-[#171717] border border-[#262626] divide-y divide-[#1A1A1A] overflow-hidden">
                   {/* Self */}
                   <div className="flex items-center gap-2.5 px-3 py-2.5">
                     <div className="relative shrink-0">
-                      <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-bold text-[#F4F6F8] uppercase">
+                      <div className="w-7 h-7 rounded-full bg-[#1F1F1F] border border-[#262626] flex items-center justify-center text-[10px] font-bold text-[#FAFAFA] uppercase">
                         {isCameraLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : userName ? userName.charAt(0) : 'U'}
                       </div>
                       <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#16191F]" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-[#F4F6F8] truncate">
-                        {userName} <span className="text-[#687180] font-normal">(você)</span>
+                      <p className="text-xs font-medium text-[#FAFAFA] truncate">
+                        {userName} <span className="text-[#8A8A8A] font-normal">(você)</span>
                       </p>
-                      <span className="text-[10px] text-[#687180]">Espectador</span>
+                      <span className="text-[10px] text-[#8A8A8A]">Espectador</span>
                     </div>
                   </div>
 
@@ -1689,11 +1689,11 @@ export const App: React.FC = () => {
                               void handleWatchStream(member.participantId);
                             }
                           }}
-                          className={`flex items-center gap-2.5 px-3 py-2.5 transition ${streamerItem ? 'cursor-pointer hover:bg-[#1D2129]' : ''
+                          className={`flex items-center gap-2.5 px-3 py-2.5 transition ${streamerItem ? 'cursor-pointer hover:bg-[#1F1F1F]' : ''
                             }`}
                         >
                           <div className="relative shrink-0">
-                            <div className="w-7 h-7 rounded-full bg-[#1D2129] border border-[#252A34] flex items-center justify-center text-[10px] font-medium text-[#9DA5B4] uppercase">
+                            <div className="w-7 h-7 rounded-full bg-[#1F1F1F] border border-[#262626] flex items-center justify-center text-[10px] font-medium text-[#8A8A8A] uppercase">
                               {member.participantId && cameraLoadingParticipants.has(member.participantId)
                                 ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                 : member.identity ? member.identity.charAt(0) : 'C'}
@@ -1701,7 +1701,7 @@ export const App: React.FC = () => {
                             <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#34D399] border border-[#16191F]" />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-xs font-medium text-[#9DA5B4] truncate">{member.identity}</p>
+                            <p className="text-xs font-medium text-[#8A8A8A] truncate">{member.identity}</p>
                             <div className="flex items-center gap-1.5">
                               {member.isHost && (
                                 <span className="text-[10px] text-[#FBBF24] flex items-center gap-0.5 font-medium">
@@ -1709,11 +1709,11 @@ export const App: React.FC = () => {
                                 </span>
                               )}
                               {isStreamingRemote ? (
-                                <span className={`text-[10px] flex items-center gap-0.5 font-medium ${isCurrentlyWatching ? 'text-[#34D399]' : 'text-[#F87171]'}`}>
+                                <span className={`text-[10px] flex items-center gap-0.5 font-medium ${isCurrentlyWatching ? 'text-[#34D399]' : 'text-[#EF4444]'}`}>
                                   <Radio className="w-2.5 h-2.5" /> {isCurrentlyWatching ? 'Assistindo agora' : 'Ao vivo (toque para ver)'}
                                 </span>
                               ) : (
-                                <span className="text-[10px] text-[#687180]">Espectador</span>
+                                <span className="text-[10px] text-[#8A8A8A]">Espectador</span>
                               )}
                             </div>
                           </div>
@@ -1735,7 +1735,7 @@ export const App: React.FC = () => {
                                   handleOpenKickModal(member.participantId, member.socketId, member.identity);
                                 }}
                                 title="Expulsar da sala"
-                                className="p-1.5 rounded bg-[#F87171]/10 hover:bg-[#F87171]/20 text-[#F87171] transition"
+                                className="p-1.5 rounded bg-[#F87171]/10 hover:bg-[#F87171]/20 text-[#EF4444] transition"
                               >
                                 <UserX className="w-3.5 h-3.5" />
                               </button>
@@ -1752,27 +1752,27 @@ export const App: React.FC = () => {
           /* ── 3. Desktop Layout (>= 768px): Sidebar + Stage ───────────── */
           <div className="h-full flex overflow-hidden">
             {/* ── Left Sidebar (Width: 230px, Fundo #2B2D31) ─────────────── */}
-            <aside className="w-56 shrink-0 bg-[#2B2D31] flex flex-col justify-between overflow-hidden select-none border-r border-[#202225]/40">
+            <aside className="w-56 shrink-0 bg-[#111111] flex flex-col justify-between overflow-hidden select-none border-r border-[#1A1A1A]">
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
                 {/* 1. PARTICIPANTES Section */}
                 <div>
-                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#949BA4] px-1 mb-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#8A8A8A] px-1 mb-2">
                     PARTICIPANTES
                   </p>
 
                   <div className="space-y-1">
                     {members.length === 0 && (
-                      <p className="px-2 py-1.5 text-xs text-[#949BA4]">Nenhum participante conectado</p>
+                      <p className="px-2 py-1.5 text-xs text-[#8A8A8A]">Nenhum participante conectado</p>
                     )}
                     {members.map((member, idx) => {
                       const isSelf = member.identity === userName;
                       return (
                         <div
                           key={member.participantId || member.socketId || `${member.identity}-${idx}`}
-                          className="group flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#35373C] transition cursor-pointer"
+                          className="group flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[#1F1F1F] transition cursor-pointer"
                         >
                           <div className="relative shrink-0">
-                            <div className="w-7 h-7 rounded-full bg-[#1E1F22] flex items-center justify-center text-[11px] font-bold text-white uppercase overflow-hidden border border-white/10">
+                            <div className="w-7 h-7 rounded-full bg-[#171717] flex items-center justify-center text-[11px] font-bold text-white uppercase overflow-hidden border border-white/10">
                                 {member.participantId && cameraLoadingParticipants.has(member.participantId)
                                   ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                   : member.identity ? member.identity.charAt(0) : 'U'}
@@ -1780,11 +1780,11 @@ export const App: React.FC = () => {
                             <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#23A55A] ring-2 ring-[#2B2D31]" />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-xs font-medium text-[#DBDEE1] truncate leading-tight">
-                              {member.identity} {isSelf && <span className="text-[#949BA4] font-normal">(você)</span>}
+                            <p className="text-xs font-medium text-[#D4D4D4] truncate leading-tight">
+                              {member.identity} {isSelf && <span className="text-[#8A8A8A] font-normal">(você)</span>}
                             </p>
                             {member.isHost && (
-                              <p className="text-[10px] text-[#949BA4] font-medium leading-tight">Host</p>
+                              <p className="text-[10px] text-[#8A8A8A] font-medium leading-tight">Host</p>
                             )}
                           </div>
 
@@ -1797,7 +1797,7 @@ export const App: React.FC = () => {
                                   handleOpenTransferModal(member.participantId, member.socketId, member.identity);
                                 }}
                                 title="Tornar Host"
-                                className="p-1 rounded hover:bg-[#404249] text-[#FEE75C]"
+                                className="p-1 rounded hover:bg-[#2A2A2A] text-[#FBBF24]"
                               >
                                 <Crown className="w-3 h-3" />
                               </button>
@@ -1807,7 +1807,7 @@ export const App: React.FC = () => {
                                   handleOpenKickModal(member.participantId, member.socketId, member.identity);
                                 }}
                                 title="Expulsar"
-                                className="p-1 rounded hover:bg-[#404249] text-[#ED4245]"
+                                className="p-1 rounded hover:bg-[#2A2A2A] text-[#EF4444]"
                               >
                                 <UserX className="w-3 h-3" />
                               </button>
@@ -1821,13 +1821,13 @@ export const App: React.FC = () => {
 
                 {/* 2. TRANSMISSÕES Section */}
                 <div>
-                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#949BA4] px-1 mb-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#8A8A8A] px-1 mb-2">
                     TRANSMISSÕES
                   </p>
 
                   <div className="space-y-1">
                     {displayStreamersList.length === 0 && (
-                      <p className="px-2 py-1.5 text-xs text-[#949BA4]">Nenhuma transmissão ativa</p>
+                      <p className="px-2 py-1.5 text-xs text-[#8A8A8A]">Nenhuma transmissão ativa</p>
                     )}
                     {displayStreamersList.map((streamer, idx) => {
                       const isSelected =
@@ -1846,15 +1846,15 @@ export const App: React.FC = () => {
                           }}
                           className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition cursor-pointer ${
                             isSelected
-                              ? 'bg-[#35373C] text-white shadow-sm'
-                              : 'text-[#DBDEE1] hover:bg-[#35373C]/60 hover:text-white'
+                              ? 'bg-[#1F1F1F] text-white shadow-sm'
+                              : 'text-[#D4D4D4] hover:bg-[#1F1F1F]/60 hover:text-white'
                           }`}
                         >
-                          <div className="w-6 h-6 rounded-full bg-[#1E1F22] flex items-center justify-center text-[10px] font-bold text-white shrink-0 overflow-hidden border border-white/10">
+                          <div className="w-6 h-6 rounded-full bg-[#171717] flex items-center justify-center text-[10px] font-bold text-white shrink-0 overflow-hidden border border-white/10">
                             {streamer.displayName.charAt(0)}
                           </div>
                           <span className="text-xs font-medium truncate flex-1">
-                            {streamer.displayName} <span className="text-[11px] text-[#949BA4] font-normal">(Ao vivo)</span>
+                            {streamer.displayName} <span className="text-[11px] text-[#8A8A8A] font-normal">(Ao vivo)</span>
                           </span>
                         </div>
                       );
@@ -1866,14 +1866,14 @@ export const App: React.FC = () => {
             </aside>
 
             {/* ── Main Stage Area: StageGrid ──────────────────────────── */}
-            <div className="flex-1 flex flex-col overflow-hidden bg-[#313338] relative">
+            <div className="flex-1 flex flex-col overflow-hidden bg-[#0A0A0A] relative">
               {/* Audio warning banner */}
               {audioWarningMessage && (
-                <div className="mx-4 mt-3 flex flex-col gap-1.5 bg-[#FEE75C]/15 border border-[#FEE75C]/30 rounded-lg px-3.5 py-2 text-xs text-[#FEE75C] z-20">
+                <div className="mx-4 mt-3 flex flex-col gap-1.5 bg-[#FEE75C]/15 border border-[#FEE75C]/30 rounded-lg px-3.5 py-2 text-xs text-[#FBBF24] z-20">
                   <div className="flex items-center gap-2.5">
                     <AlertTriangle className="w-4 h-4 shrink-0" />
                     <span className="flex-1">{audioWarningMessage}</span>
-                    <button onClick={() => setAudioWarningMessage(null)} className="text-[#FEE75C]/60 hover:text-[#FEE75C]">
+                    <button onClick={() => setAudioWarningMessage(null)} className="text-[#FBBF24]/60 hover:text-[#FBBF24]">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -1942,28 +1942,28 @@ export const App: React.FC = () => {
           className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={(e) => { if (e.target === e.currentTarget) handleCloseModalAction(); }}
         >
-          <div className="relative w-full max-w-sm rounded-xl bg-[#16191F] border border-[#252A34] shadow-2xl p-5 space-y-4 animate-in zoom-in-95 duration-150">
+          <div className="relative w-full max-w-sm rounded-xl bg-[#171717] border border-[#262626] shadow-2xl p-5 space-y-4 animate-in zoom-in-95 duration-150">
             <div className="flex items-start gap-3.5">
               <div
                 className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${actionModal.type === 'kick'
-                    ? 'bg-[#F87171]/15 text-[#F87171] border border-[#F87171]/30'
+                    ? 'bg-[#F87171]/15 text-[#EF4444] border border-[#F87171]/30'
                     : 'bg-[#FBBF24]/15 text-[#FBBF24] border border-[#FBBF24]/30'
                   }`}
               >
                 {actionModal.type === 'kick' ? <UserX className="w-5 h-5" /> : <Crown className="w-5 h-5" />}
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-[#F4F6F8]">
+                <h3 className="text-sm font-semibold text-[#FAFAFA]">
                   {actionModal.type === 'kick' ? 'Expulsar Participante' : 'Transferir Host'}
                 </h3>
-                <p className="text-xs text-[#9DA5B4] mt-1 leading-relaxed">
+                <p className="text-xs text-[#8A8A8A] mt-1 leading-relaxed">
                   {actionModal.type === 'kick' ? (
                     <>
-                      Tem certeza de que deseja expulsar <strong className="text-[#F4F6F8]">"{actionModal.targetName}"</strong> da sala? O usuário será desconectado imediatamente.
+                      Tem certeza de que deseja expulsar <strong className="text-[#FAFAFA]">"{actionModal.targetName}"</strong> da sala? O usuário será desconectado imediatamente.
                     </>
                   ) : (
                     <>
-                      Deseja transferir a liderança da sala para <strong className="text-[#F4F6F8]">"{actionModal.targetName}"</strong>? Você deixará de ser Host e passará os poderes administrativos.
+                      Deseja transferir a liderança da sala para <strong className="text-[#FAFAFA]">"{actionModal.targetName}"</strong>? Você deixará de ser Host e passará os poderes administrativos.
                     </>
                   )}
                 </p>
@@ -1973,7 +1973,7 @@ export const App: React.FC = () => {
             <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-[#1D2129]">
               <button
                 onClick={handleCloseModalAction}
-                className="px-3.5 py-1.5 rounded-lg bg-[#1D2129] hover:bg-[#252A34] text-[#9DA5B4] hover:text-[#F4F6F8] text-xs font-medium transition"
+                className="px-3.5 py-1.5 rounded-lg bg-[#1F1F1F] hover:bg-[#252A34] text-[#8A8A8A] hover:text-[#FAFAFA] text-xs font-medium transition"
               >
                 Cancelar
               </button>
@@ -2000,11 +2000,11 @@ export const App: React.FC = () => {
 
       {isStartingStream && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-sm">
-          <div className="flex min-w-64 items-center gap-3 rounded-lg border border-[#252A34] bg-[#101217] px-5 py-4 shadow-card">
+          <div className="flex min-w-64 items-center gap-3 rounded-lg border border-[#262626] bg-[#111111] px-5 py-4 shadow-card">
             <Loader2 className="h-5 w-5 animate-spin text-[#5B7CFA]" />
             <div>
-              <p className="text-sm font-semibold text-[#F4F6F8]">Preparando transmissão...</p>
-              <p className="mt-0.5 text-xs text-[#9DA5B4]">Conectando áudio e vídeo.</p>
+              <p className="text-sm font-semibold text-[#FAFAFA]">Preparando transmissão...</p>
+              <p className="mt-0.5 text-xs text-[#8A8A8A]">Conectando áudio e vídeo.</p>
             </div>
           </div>
         </div>
@@ -2015,24 +2015,24 @@ export const App: React.FC = () => {
           className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-in fade-in duration-150"
           onClick={(event) => { if (event.target === event.currentTarget) setCameraErrorMessage(null); }}
         >
-          <div className="w-full max-w-sm rounded-xl border border-[#F87171]/30 bg-[#16191F] p-5 shadow-2xl animate-in zoom-in-95 duration-150">
+          <div className="w-full max-w-sm rounded-xl border border-[#F87171]/30 bg-[#171717] p-5 shadow-2xl animate-in zoom-in-95 duration-150">
             <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#F87171]/30 bg-[#F87171]/15 text-[#F87171]">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#F87171]/30 bg-[#F87171]/15 text-[#EF4444]">
                 <VideoOff className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold text-[#F4F6F8]">Câmera indisponível</h3>
-                <p className="mt-1 text-xs leading-relaxed text-[#9DA5B4]">{cameraErrorMessage}</p>
+                <h3 className="text-sm font-semibold text-[#FAFAFA]">Câmera indisponível</h3>
+                <p className="mt-1 text-xs leading-relaxed text-[#8A8A8A]">{cameraErrorMessage}</p>
               </div>
               <button
                 onClick={() => setCameraErrorMessage(null)}
                 title="Fechar"
-                className="rounded-md p-1 text-[#687180] transition hover:bg-[#252A34] hover:text-[#F4F6F8]"
+                className="rounded-md p-1 text-[#8A8A8A] transition hover:bg-[#252A34] hover:text-[#FAFAFA]"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="mt-4 flex justify-end border-t border-[#252A34] pt-3">
+            <div className="mt-4 flex justify-end border-t border-[#262626] pt-3">
               <button
                 onClick={() => setCameraErrorMessage(null)}
                 className="rounded-lg bg-[#5865F2] px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-[#4752C4]"
