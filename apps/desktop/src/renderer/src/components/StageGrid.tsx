@@ -188,91 +188,91 @@ const VideoTile: React.FC<{
   fill = false,
   onExpand,
 }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
+    const videoRef = useRef<HTMLVideoElement>(null);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !stream) return;
-    video.srcObject = stream;
-    void video.play().catch(() => undefined);
-    return () => {
-      video.srcObject = null;
-    };
-  }, [stream]);
+    useEffect(() => {
+      const video = videoRef.current;
+      if (!video || !stream) return;
+      video.srcObject = stream;
+      void video.play().catch(() => undefined);
+      return () => {
+        video.srcObject = null;
+      };
+    }, [stream]);
 
-  return (
-    <div className={`relative w-full rounded-2xl overflow-hidden bg-[#171717] border border-[#262626]/40 shadow-xl group flex flex-col justify-between ${fill ? 'h-full min-h-[300px]' : 'aspect-video'}`}>
-      {/* Video element */}
-      {stream ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#18191D]">
-          <Monitor className="w-12 h-12 text-[#6D6F78]" />
-        </div>
-      )}
+    return (
+      <div className={`relative w-full rounded-2xl overflow-hidden bg-[#171717] border border-[#262626]/40 shadow-xl group flex flex-col justify-between ${fill ? 'h-full min-h-[300px]' : 'aspect-video'}`}>
+        {/* Video element */}
+        {stream ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-[#18191D]">
+            <Monitor className="w-12 h-12 text-[#6D6F78]" />
+          </div>
+        )}
 
-      {/* Top overlay shadow */}
-      <div className="absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/50 to-transparent pointer-events-none" />
+        {/* Top overlay shadow */}
+        <div className="absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/50 to-transparent pointer-events-none" />
 
-      {/* Bottom overlay with stream details & live badge */}
-      <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 via-black/50 to-transparent flex flex-col gap-1.5 z-10">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs sm:text-sm font-semibold text-white drop-shadow truncate">
-            {title}
-          </span>
-          {isLive && (
-            <span className="shrink-0 px-1.5 py-0.5 rounded bg-[#EF4444] text-white text-[10px] font-bold tracking-wider uppercase shadow">
-              AO VIVO
+        {/* Bottom overlay with stream details & live badge */}
+        <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 via-black/50 to-transparent flex flex-col gap-1.5 z-10">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs sm:text-sm font-semibold text-white drop-shadow truncate">
+              {title}
             </span>
-          )}
-        </div>
+            {isLive && (
+              <span className="shrink-0 px-1.5 py-0.5 rounded bg-[#EF4444] text-white text-[10px] font-bold tracking-wider uppercase shadow">
+                AO VIVO
+              </span>
+            )}
+          </div>
 
-        {/* Action row (viewers + Watch button) */}
-        {!isCamera && (
-          <div className="flex items-center justify-between pt-1">
-            <div className="flex items-center gap-1.5 text-[11px] text-[#DBDEE1]/80">
-              <Users className="w-3.5 h-3.5" />
-              <span>{viewersCount > 0 ? `${viewersCount} espectadores` : '0 espectadores'}</span>
-            </div>
+          {/* Action row (viewers + Watch button) */}
+          {!isCamera && (
+            <div className="flex items-center justify-between pt-1">
+              <div className="flex items-center gap-1.5 text-[11px] text-[#DBDEE1]/80">
+                <Users className="w-3.5 h-3.5" />
+                <span>{viewersCount > 0 ? `${viewersCount} espectadores` : '0 espectadores'}</span>
+              </div>
 
-            {showWatchButton && onWatch && (
-              <div className="flex items-center gap-1.5">
-                {onExpand && (
+              {showWatchButton && onWatch && (
+                <div className="flex items-center gap-1.5">
+                  {onExpand && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onExpand();
+                      }}
+                      title="Ampliar no palco"
+                      className="p-1.5 rounded-md bg-black/45 hover:bg-black/65 text-white transition"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      onExpand();
+                      onWatch();
                     }}
-                    title="Ampliar no palco"
-                    className="p-1.5 rounded-md bg-black/45 hover:bg-black/65 text-white transition"
+                    className="flex items-center gap-1 px-3 py-1 rounded-md bg-[#FFFFFF] hover:bg-[#00000073]  hover:text-white text-black text-xs font-semibold shadow-sm transition active:scale-95"
                   >
-                    <Maximize2 className="w-3.5 h-3.5" />
+                    <Play className="w-3 h-3 fill-black" />
+                    Assistir
                   </button>
-                )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onWatch();
-                  }}
-                  className="flex items-center gap-1 px-3 py-1 rounded-md bg-[#FFFFFF] hover:bg-[#4752C4] text-white text-xs font-semibold shadow-sm transition active:scale-95"
-                >
-                  <Play className="w-3 h-3 fill-white" />
-                  Assistir
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  );
-};
+    );
+  };
 
 export const StageGrid: React.FC<StageGridProps> = ({
   members,
@@ -484,71 +484,68 @@ export const StageGrid: React.FC<StageGridProps> = ({
           className={`pointer-events-auto flex w-fit max-w-full items-center gap-2 sm:gap-3 bg-[#111111]/95 backdrop-blur-md border border-[#262626] shadow-2xl rounded-2xl px-3 sm:px-4 py-2 transition-transform duration-500 ease-in-out ${controlsVisible ? '' : 'pointer-events-none'}`}
           style={{ transform: controlsVisible ? 'translateY(0)' : 'translateY(calc(100% + 1rem))' }}
         >
-            {/* Camera Button */}
-            <button
-              onClick={onToggleCamera}
-              disabled={isCameraLoading}
-              title={isCameraLoading ? 'Iniciando câmera...' : isCameraActive ? 'Desligar câmera' : 'Ligar câmera'}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition disabled:cursor-wait disabled:opacity-60 ${
-                isCameraActive
-                  ? 'bg-[#1F1F1F] text-white hover:bg-[#2A2A2A]'
-                  : 'text-[#DBDEE1] hover:bg-[#1F1F1F] hover:text-white'
+          {/* Camera Button */}
+          <button
+            onClick={onToggleCamera}
+            disabled={isCameraLoading}
+            title={isCameraLoading ? 'Iniciando câmera...' : isCameraActive ? 'Desligar câmera' : 'Ligar câmera'}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition disabled:cursor-wait disabled:opacity-60 ${isCameraActive
+              ? 'bg-[#1F1F1F] text-white hover:bg-[#2A2A2A]'
+              : 'text-[#DBDEE1] hover:bg-[#1F1F1F] hover:text-white'
               }`}
+          >
+            {isCameraLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : isCameraActive ? <VideoOff className="w-4 h-4 text-[#EF4444]" /> : <Video className="w-4 h-4" />}
+            <span className="hidden sm:inline">{isCameraLoading ? 'Iniciando...' : isCameraActive ? 'Desligar Câmera' : 'Ligar Câmera'}</span>
+          </button>
+
+          {/* Screen Share Button */}
+          <button
+            onClick={onToggleScreenShare}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition ${isStreaming
+              ? 'bg-[#EF4444]/20 text-[#EF4444] border border-[#ED4245]/30'
+              : 'text-[#DBDEE1] hover:bg-[#1F1F1F] hover:text-white'
+              }`}
+          >
+            <MonitorUp className="w-4 h-4" />
+            <span className="hidden sm:inline">{isStreaming ? 'Parar Transmissão' : 'Compartilhar Tela'}</span>
+          </button>
+
+          {/* Quality Picker Button */}
+          <div className="relative">
+            <button
+              onClick={() => setQualityMenuOpen(!qualityMenuOpen)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-[#DBDEE1] hover:bg-[#1F1F1F] hover:text-white transition"
             >
-              {isCameraLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : isCameraActive ? <VideoOff className="w-4 h-4 text-[#EF4444]" /> : <Video className="w-4 h-4" />}
-              <span className="hidden sm:inline">{isCameraLoading ? 'Iniciando...' : isCameraActive ? 'Desligar Câmera' : 'Ligar Câmera'}</span>
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">Mudar Qualidade</span>
             </button>
 
-            {/* Screen Share Button */}
-            <button
-              onClick={onToggleScreenShare}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition ${
-                isStreaming
-                  ? 'bg-[#EF4444]/20 text-[#EF4444] border border-[#ED4245]/30'
-                  : 'text-[#DBDEE1] hover:bg-[#1F1F1F] hover:text-white'
-              }`}
-            >
-              <MonitorUp className="w-4 h-4" />
-              <span className="hidden sm:inline">{isStreaming ? 'Parar Transmissão' : 'Compartilhar Tela'}</span>
-            </button>
-
-            {/* Quality Picker Button */}
-            <div className="relative">
-              <button
-                onClick={() => setQualityMenuOpen(!qualityMenuOpen)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-[#DBDEE1] hover:bg-[#1F1F1F] hover:text-white transition"
-              >
-                <Settings className="w-4 h-4" />
-                <span className="hidden sm:inline">Mudar Qualidade</span>
-              </button>
-
-              {qualityMenuOpen && (
-                <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-40 bg-[#171717] border border-[#262626] rounded-xl shadow-2xl p-1.5 space-y-1">
-                  {['720p30', '720p60', '1080p30', '1080p60'].map((preset) => (
-                    <button
-                      key={preset}
-                      onClick={() => {
-                        onChangeQuality(preset);
-                        setQualityMenuOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                        qualityPreset === preset ? 'bg-[#FFFFFF] text-[#0A0A0A]' : 'text-[#D4D4D4] hover:bg-[#1F1F1F] hover:text-[#FAFAFA]'
+            {qualityMenuOpen && (
+              <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-40 bg-[#171717] border border-[#262626] rounded-xl shadow-2xl p-1.5 space-y-1">
+                {['720p30', '720p60', '1080p30', '1080p60'].map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => {
+                      onChangeQuality(preset);
+                      setQualityMenuOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-semibold transition ${qualityPreset === preset ? 'bg-[#FFFFFF] text-[#0A0A0A]' : 'text-[#D4D4D4] hover:bg-[#1F1F1F] hover:text-[#FAFAFA]'
                       }`}
-                    >
-                      {preset}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
-            {/* Leave Room Button */}
-            <button
-              onClick={onLeaveRoom}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#EF4444] hover:bg-[#DC2626] text-white text-xs font-semibold shadow-md transition active:scale-95"
-            >
-              <span>Sair da Sala</span>
-            </button>
+          {/* Leave Room Button */}
+          <button
+            onClick={onLeaveRoom}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#EF4444] hover:bg-[#DC2626] text-white text-xs font-semibold shadow-md transition active:scale-95"
+          >
+            <span>Sair da Sala</span>
+          </button>
         </div>
       </div>
     </div>
